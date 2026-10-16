@@ -1,0 +1,12 @@
+{
+  "description": "Tu memoria externa para las cosas importantes que no quieres olvidar.",
+  "robots": {
+    "index": false
+  },
+  "accessibility": {
+    "addBypassLinks": false,
+    "ignoreReducedMotion": false
+  },
+  "title": "RECUERDA",
+  "language": "es"
+}

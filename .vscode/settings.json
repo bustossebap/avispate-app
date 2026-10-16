@@ -1,0 +1,9 @@
+{
+  // Live Server sirve el build ya hecho: la raíz es dist/ y el `base` relativo del build hace que los
+  // `./assets/…` resuelvan ahí. Con `host` en 0.0.0.0 la app también se ve desde el teléfono.
+  // Ojo: para 0.0.0.0 el puerto 5500 tiene que estar reenviado/accesible en la red local.
+  "liveServer.settings.root": "/dist",
+  "liveServer.settings.port": 5500,
+  "liveServer.settings.host": "0.0.0.0",
+  "liveServer.settings.wait": 150
+}
