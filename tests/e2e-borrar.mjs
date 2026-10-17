@@ -449,7 +449,7 @@ const eliminarRecordatorio = async (m) => {
   )
   check(
     "E4 · y el pie dice la versión y la etapa",
-    m.txt().includes("AVISPATE · V2.0 · Etapa 14"),
+    m.txt().includes("AVISPATE · V2.1 · Etapa 15"),
     m.txt().slice(-120),
   )
   check(

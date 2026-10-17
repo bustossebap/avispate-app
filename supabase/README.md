@@ -1,4 +1,4 @@
-# Nube de AVISPATE · Etapas 10 a 15 (avisos con la app cerrada, entrega real y cuenta)
+# Nube de AVISPATE · Etapas 10 a 15 (avisos con la app cerrada, entrega real, cuenta y sincronización)
 
 Supabase guarda la suscripción de cada teléfono y la cola de avisos que el teléfono calculó. Cada
 minuto, un cron llama a una función que entrega lo que ya venció por el canal de cada fila: **push**
@@ -63,14 +63,29 @@ Supabase · dispositivos + avisos  ◀── cron cada minuto ──▶ Edge Fun
    **Etapa 15.** Después de la 0003, corré `supabase/migrations/0004_etapa15.sql`. Crea
    `perfiles_cuenta` y `dispositivos_cuenta` con RLS de solo lectura por usuario, el disparador que
    crea el perfil al nacer una cuenta y las funciones `reclamar_dispositivo`,
-   `desvincular_dispositivo` y `mis_dispositivos`, ejecutables **solo** por `authenticated`. No toca
-   los recordatorios: la sincronización por entidad es la fase siguiente. Al final, esto debe devolver
-   las tres funciones:
+   `desvincular_dispositivo` y `mis_dispositivos`, ejecutables **solo** por `authenticated`. Al final,
+   esto debe devolver las tres funciones:
 
    ```sql
    select proname from pg_proc
     where pronamespace = 'public'::regnamespace
       and proname in ('reclamar_dispositivo', 'desvincular_dispositivo', 'mis_dispositivos');
+   ```
+
+   Después, `supabase/migrations/0005_etapa15_datos.sql` (tampoco lleva marcadores). Crea las cinco
+   tablas por entidad (`recordatorios`, `categorias`, `perfiles`, `ajustes`, `marcas`), el índice de
+   borrados `tumbas`, la secuencia `sync_seq` y las funciones `subir_cambios`, `bajar_cambios` y
+   `purgar_tumbas`. Es idempotente y no toca las tablas de avisos. Al final, estas consultas deben
+   devolver las cinco tablas y las tres funciones:
+
+   ```sql
+   select tablename from pg_tables
+    where schemaname = 'public'
+      and tablename in ('recordatorios','categorias','perfiles','ajustes','marcas','tumbas')
+    order by tablename;
+   select proname from pg_proc
+    where pronamespace = 'public'::regnamespace
+      and proname in ('subir_cambios','bajar_cambios','purgar_tumbas');
    ```
 
 2. **Secretos de las funciones.** El proyecto ya tiene las claves VAPID en `.env.local` (que no se
@@ -210,13 +225,35 @@ select tablename, policyname, cmd, roles
  where schemaname = 'public' and tablename like '%cuenta%';
 ```
 
-### Lo que todavía no hace
+### Sincronización (fases 2 y 3)
 
-La cuenta existe y el teléfono queda vinculado, pero los recordatorios, las categorías, los ajustes y
-los adjuntos siguen viviendo **solo** en el teléfono. El esquema por entidad, la cola de salida, el
-cursor de bajada y las tumbas son las fases 2 y 3 de
-[`docs/etapa15-cuenta-y-sincronizacion.md`](../docs/etapa15-cuenta-y-sincronizacion.md). Hasta que
-estén, Ajustes lo dice: la sincronización entre dispositivos llega en la próxima fase.
+Con la cuenta vinculada, la app sube y baja las cinco entidades. La verdad sigue en el teléfono: el
+servidor guarda el `payload` completo y aplica la misma regla de conflicto que el cliente.
+
+- **Subida:** `subir_cambios(dispositivo, token, cambios)` recibe un lote de hasta 200 cambios
+  `{entidad, id, payload, actualizadoEn, eliminadoEn?}`. Exige la sesión (`auth.uid()`), el token del
+  dispositivo y que ese dispositivo esté vinculado a la cuenta. Un cambio inválido o ajeno se cuenta
+  como `ignorados`; no rompe el lote entero.
+- **Bajada:** `bajar_cambios(dispositivo, token, desde, limite)` devuelve las filas con `seq` mayor
+  que el cursor, ordenadas. El `seq` sale de una secuencia compartida y se actualiza en cada alta,
+  edición o borrado. Las filas borradas también vuelven (`deleted_at`), para que el otro teléfono
+  borre su copia.
+- **Conflicto:** `updated_at` mayor gana; si empatan, `dispositivo_id` mayor; si también empatan,
+  `md5(payload)` mayor. Una hora futura se acota a «ahora» y una anterior al año 2000 se descarta.
+- **Tumbas:** `tumbas` guarda el índice de borrados para no bajar la tabla entera; `purgar_tumbas(90)`
+  borra las filas y las marcas viejas. Esa función **no** se expone a `authenticated`: se llama desde
+  el SQL Editor o un cron interno.
+- **Prueba negativa:** `supabase/tests/0005_negativo.sql` crea dos cuentas y dos dispositivos dentro
+  de una transacción y comprueba RLS, token incorrecto, dispositivo no vinculado, `anon`, borrado
+  lógico y el desempate por dispositivo. Se corre después de aplicar la 0005 y se revierte.
+
+### Lo que todavía no hace la cuenta
+
+La sincronización ya lleva recordatorios, categorías, perfiles, ajustes y marcas de avisos entre
+teléfonos de la misma cuenta. Faltan los **adjuntos** en Storage, **Realtime** (hoy se consulta cada
+45 s o con «Sincronizar ahora»), el nombre editable y el cierre remoto de los dispositivos, y el
+historial de versiones para un conflicto. Los detalles están en
+[`docs/etapa15-cuenta-y-sincronizacion.md`](../docs/etapa15-cuenta-y-sincronizacion.md).
 
 ## WhatsApp y correo (Etapa 14)
 
@@ -295,13 +332,17 @@ envíos» al tocar «Revisar ahora» en la tarjeta de salud o al volver a Ajuste
   `proveedor_id` coincide con el id que devolvió el proveedor; no puede crear envíos nuevos.
 - `destino` (número o correo) es un dato personal y vive en la base igual que el contacto del usuario:
   no se muestra en ninguna tabla pública, y la vista `envios` está revocada para `anon`. Sigue colgada
-  del dispositivo; cuando el motor de sincronización (fase 3 de la Etapa 15) lleve las filas a un
-  `user_id`, esa columna entra en la política por usuario.
+  del dispositivo; el motor de sincronización de la Etapa 15 no lleva `avisos`, así que esa columna
+  todavía no tiene una política por usuario.
 - La cuenta (Etapa 15) suma sus propias reglas: `perfiles_cuenta` y `dispositivos_cuenta` tienen RLS
   y una política de `select` por usuario; `anon` no puede leerlas ni escribir directamente. Las
   funciones `reclamar_dispositivo`, `desvincular_dispositivo` y `mis_dispositivos` están revocadas
   de `public`/`anon` y solo las puede ejecutar `authenticated`. El alta, además de la sesión, exige el
   token del dispositivo.
+- Las cinco tablas de datos de la 0005 tienen RLS y una política de `select` para `authenticated`
+  (`auth.uid() = user_id`); no hay escritura directa, solo `subir_cambios`. `anon` no tiene acceso.
+  `subir_cambios` y `bajar_cambios` son `security definer`, exigen sesión, token y vínculo, y revocan
+  `public`/`anon`; `purgar_tumbas` no está expuesta a `authenticated`.
 - Los secretos de WhatsApp y correo (`WHATSAPP_TOKEN`, `RESEND_API_KEY`, etc.) solo existen como
   variables de entorno de la función: el GET de estado devuelve booleanos y el nombre de la plantilla,
   nunca sus valores. La `VAPID_PRIVATE_KEY` tampoco entra al bundle porque no lleva el prefijo `VITE_`.

@@ -1,4 +1,4 @@
-# AVISPATE — V2.0 (Etapa 14)
+# AVISPATE — V2.1 (Etapa 15)
 
 Primera transformación del prototipo de Figma Make a una V1 funcional ejecutable como aplicación web local.
 
@@ -33,7 +33,7 @@ Primera transformación del prototipo de Figma Make a una V1 funcional ejecutabl
 - Posponer desde la notificación: «Posponer 10 min» o «Posponer 1 hora» mueve el aviso en la nube sin abrir la app.
 - Salud de la cola (Ajustes): cuántos avisos hay en este teléfono, qué tiene la nube y cuándo se subió por última vez, con «Revisar ahora».
 - Entrega real (Ajustes): estado de WhatsApp y correo, botones «Probar», últimos envíos con canal y estado, y el motivo cuando el proveedor falla. Las filas de la cola viajan por canal con destino, usuario y zona horaria; los secretos viven solo en Supabase.
-- Cuenta opcional (Etapa 15, en curso): enlace mágico por correo, sesión que se recuerda en el teléfono y vínculo del dispositivo a la cuenta, con RLS por usuario. El modo invitado no cambia; la sincronización de recordatorios es la fase siguiente.
+- Cuenta opcional (Etapa 15, fases 1–3): enlace mágico por correo, sesión que se recuerda en el teléfono, vínculo del dispositivo y sincronización de recordatorios, categorías, perfiles, ajustes y marcas entre teléfonos de la misma cuenta, con RLS por usuario. El modo invitado no cambia; los adjuntos y Realtime todavía no viajan.
 - Deshacer cualquier borrado: recordatorios, adjuntos, categorías (en sus dos salidas) y usuarios completos, desde el aviso que aparece abajo.
 - Espacio en el dispositivo (Ajustes): cuánto ocupan los textos, las fotos y las notas de voz, y un botón para liberar los archivos que ya no usa ningún recordatorio.
 
@@ -79,7 +79,7 @@ IP de la red.
 
 La batería E2E vive **dentro del proyecto** (`tests/`): monta el bundle real dentro de jsdom y recorre la
 app como si alguien la tocara —onboarding, crear y editar recordatorios, calendarios, archivos, usuarios,
-borrar y deshacer, Ajustes, tips—. Son **17 suites y 840 comprobaciones**.
+borrar y deshacer, Ajustes, tips—. Son **19 suites y 930 comprobaciones**.
 
 ```bash
 npm run build        # la batería prueba dist/: si está viejo, se avisa y no corre
@@ -122,7 +122,7 @@ trampa (instalar con pnpm dejaba las pruebas rotas). Si algún día vuelve pnpm,
 
 ## Nota importante sobre WhatsApp
 
-La opción WhatsApp está preparada a nivel de UX y modelo de datos, pero **no envía mensajes reales todavía**. Para eso la siguiente etapa requiere backend + base de datos + integración oficial de WhatsApp Business Platform/Meta.
+WhatsApp y el correo ya salen de verdad desde la Etapa 14: la app encola una fila por canal y la nube entrega con la Cloud API de Meta o con Resend. Para que funcione en producción hay que configurar la cuenta de Meta Business, la plantilla aprobada, el webhook y los secretos de las funciones; sin esa configuración, Ajustes lo explica y los avisos locales siguen funcionando. La guía paso a paso está en `supabase/README.md`.
 
 ## Datos
 
@@ -181,7 +181,7 @@ Los recordatorios ya eran de cada usuario; ahora **también lo son su contacto, 
 - **Formulario de Crear**: al elegir «Recordar para» avisa qué canales de ese usuario no están configurados.
 - **Migración automática**: el contacto y Google Calendar globales de la V1.5 se mudan al usuario «yo» al abrir la app y las claves viejas (`recuerda.contacto.v1`, `recuerda.gcal.v1`) se borran, sin perder nada.
 
-Sigue pendiente el envío real (backend + WhatsApp Business Platform/Meta + OAuth de Google por usuario): en esta etapa la independencia es de datos y de UX, y los avisos por WhatsApp/correo siguen simulados.
+En esa etapa el envío real todavía quedaba pendiente; la Etapa 14 lo cerró con la Cloud API de Meta y Resend. El OAuth de Google por usuario sigue pendiente y llega con los calendarios de ida y vuelta de la Etapa 16.
 
 ## Etapa 2: hora propia, secciones más claras y logos reales
 
@@ -527,10 +527,12 @@ comprobaciones: separación por canal, consentimiento, destinos, lo que sube a l
 botones de prueba, el modo sin red, la migración y las dos Edge Functions). La batería pasa de 799 a
 **840**.
 
-## Etapa 15 en curso: la cuenta (V2.1)
+## Etapa 15: cuenta y sincronización (V2.1)
 
 La Etapa 15 es la más grande del roadmap —cuenta, sincronización, adjuntos en la nube y lista de
-dispositivos—, así que se entrega por fases. Esta primera fase deja la identidad y el vínculo:
+dispositivos—, así que se entrega por fases. Las fases 1, 2 y 3 ya están terminadas: la cuenta, el
+esquema por entidad y el motor de sincronización funcionan. Quedan la lista de dispositivos con cierre
+remoto (fase 4), los adjuntos en Storage y Realtime.
 
 - **Enlace mágico, sin contraseña.** `src/lib/cuenta.ts` pide el enlace a Supabase Auth, procesa la
   vuelta con los tokens en el hash, pide la cuenta con `GET /auth/v1/user`, guarda la sesión en el
@@ -541,22 +543,34 @@ dispositivos—, así que se entrega por fases. Esta primera fase deja la identi
   vuelve al modo invitado.
 - **Vincular este teléfono.** `reclamar_dispositivo` exige `auth.uid()` y el token del dispositivo (el
   id solo no alcanza), y `desvincular_dispositivo` borra únicamente el vínculo de quien llama.
-- **RLS de verdad.** `perfiles_cuenta` y `dispositivos_cuenta` tienen RLS y una política de `select`
-  por usuario; `anon` no las toca y las funciones están revocadas de `public`/`anon`. La prueba
-  negativa con dos cuentas y dos dispositivos se corrió contra el proyecto en una transacción que se
-  revierte: cada cuenta ve lo suyo, no ve lo ajeno y las escrituras directas fallan por permisos.
-- **Diseño completo.** `docs/etapa15-cuenta-y-sincronizacion.md` deja escritas las cuatro fases, el
-  esquema por entidad, la cola de salida, el cursor de bajada, las tumbas y las reglas de conflicto.
-  La sincronización de recordatorios todavía **no** está: hasta que llegue, la tarjeta lo dice y la
-  app sigue siendo local.
+- **RLS de verdad.** `perfiles_cuenta`, `dispositivos_cuenta` y las cinco entidades sincronizadas
+  tienen RLS por usuario; `anon` no las toca y las escrituras pasan solo por `security definer`. La
+  prueba negativa con dos cuentas y dos dispositivos se corre contra el proyecto en una transacción
+  que se revierte: cada cuenta ve lo suyo, no ve lo ajeno y las escrituras directas fallan por permisos.
+- **Motor de sincronización.** `src/lib/sync.ts` mantiene una cola de salida por dispositivo en
+  `localStorage` (`avispate.sync.v1`) y sube recordatorios, categorías, perfiles, ajustes y marcas con
+  `subir_cambios`, en lotes de hasta 200 cambios. La primera pasada baja antes de subir para que los
+  valores de fábrica de un teléfono nuevo no pisen una cuenta que ya tiene datos.
+- **Bajada y conflictos.** `bajar_cambios` devuelve las filas con `seq` mayor que el cursor, incluidas
+  las tumbas. La regla es la misma en cliente y servidor: gana `updated_at`; si empatan,
+  `dispositivo_id`; si también empatan, `md5(payload)`. Una hora futura se acota a «ahora».
+- **Cuándo sincroniza.** 1,2 s después de un cambio local, cada 45 s mientras hay cuenta y al volver
+  la conexión. «Sincronizar ahora» fuerza una pasada y muestra el resultado en la tarjeta
+  **Sincronización**. Sin cuenta o sin red, la app sigue siendo local y no se rompe nada.
+- **Todavía no.** La Fase 4 agrega nombre editable, cierre remoto y la decisión de conservar o borrar
+  la copia local al salir. Los adjuntos siguen en el teléfono que los agregó: el payload viaja, pero
+  el archivo todavía no se sube a Storage. Realtime tampoco está conectado; por eso hay sondeo cada
+  45 s.
 
-La migración nueva es `0004_etapa15.sql` (ya aplicada al proyecto) y la guía de Auth —Site URL,
-Redirect URLs, rate limits y la prueba de RLS— está en `supabase/README.md`. La suite nueva es
-`tests/e2e-cuenta.mjs` (54 comprobaciones: invitado, correo inválido, envío, modo sin red, sesión
-persistida, enlace feliz y vencido, vínculo, lista de dispositivos, desvínculo, cierre de sesión y el
-contrato de la migración y la configuración de Auth). La batería pasa de 840 a **894**.
+La migración nueva es `0005_etapa15_datos.sql` (ya aplicada al proyecto, junto con `0004_etapa15.sql`)
+y la guía de Auth, RLS y sincronización está en `supabase/README.md`. Las suites de la etapa son
+`tests/e2e-cuenta.mjs` (54 comprobaciones de identidad, vínculo y sesión) y `tests/e2e-sync.mjs` (36:
+subida inicial, bajada remota, desempate por dispositivo, tumbas, caída de red, recuperación de la cola
+pendiente y un lote de 205 cambios que se parte y se vuelve a bajar paginado). La prueba negativa de
+`supabase/tests/0005_negativo.sql` se corre contra el proyecto y se revierte. La batería pasa de 894 a
+**930**.
 
-## Roadmap: de la V2.0 a la V3.1
+## Roadmap: de la V2.1 a la V3.1
 
 Esto es un plan, no una promesa: los esfuerzos son semanas de una persona y se ajustan al ritmo real. El
 orden no es casual. Con el envío real ya cerrado, sigue la cuenta, porque sin cuenta no hay
@@ -723,10 +737,10 @@ documentados y queda el informe de lanzamiento con lo aprendido y el roadmap de 
 Apps de escritorio nativas, SSO empresarial y consola de administración, un asistente con IA que invente
 recordatorios, publicidad y un mercado de plantillas. Si alguna entra, será una etapa nueva con su propio
 número: este roadmap termina en la V3.1, con AVISPATE instalable, sincronizada, colaborativa y en las
-tiendas. La Etapa 15 ya está en curso con la cuenta y el vínculo del dispositivo; le siguen el esquema
-por entidad y el motor de sincronización. Conviene iniciar ya las verificaciones externas que tardan
-(cuenta de Meta Business, dominio y proveedor de correo) para que no frenen el código; el código de la
-Etapa 14 ya está listo para usarlas.
+tiendas. La Etapa 15 ya tiene la cuenta, el esquema por entidad y el motor de sincronización; le siguen
+la Fase 4 (dispositivos y sesiones), los adjuntos en Storage y Realtime. Conviene iniciar ya las
+verificaciones externas que tardan (cuenta de Meta Business, dominio y proveedor de correo) para que no
+frenen el código; la Etapa 14 ya está lista para usarlas.
 
 ## Preguntas sobre el permiso de notificaciones y el aviso de inactividad
 

@@ -440,16 +440,16 @@ check(
     bundle.includes("enviar-avisos"),
 )
 check(
-  "F · el pie de Ajustes ya es el de la V2.0",
-  texto.includes("AVISPATE · V2.0 · Etapa 14"),
+  "F · el pie de Ajustes ya es el de la V2.1",
+  texto.includes("AVISPATE · V2.1 · Etapa 15"),
   texto.slice(-60),
 )
 
 const readme = fs.readFileSync(path.join(BASE, "README.md"), "utf8")
 const guia = fs.readFileSync(path.join(BASE, "supabase/README.md"), "utf8")
 check(
-  "F · el README cuenta la Etapa 14 y la V2.0",
-  readme.includes("V2.0") && readme.includes("Etapa 14"),
+  "F · el README cuenta la Etapa 15 y la V2.1",
+  readme.includes("# AVISPATE — V2.1 (Etapa 15)"),
 )
 check(
   "F · la guía explica la migración, los secretos y el webhook",

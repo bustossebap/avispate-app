@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { createPortal } from "react-dom"
 import {
   armarCopia,
@@ -24,6 +24,14 @@ import {
   unitText,
 } from "./lib/avisos"
 import { buscarRecordatorios, hayConsulta } from "./lib/buscar"
+import {
+  resumenSincronizacion,
+  sincronizarCuenta,
+  type CambioSync,
+  type EntidadSync,
+  type FotoSync,
+  type ResumenSync,
+} from "./lib/sync"
 import { programarAvisos, type AvisoProgramado } from "./lib/cola"
 import {
   asegurarSesion,
@@ -199,8 +207,8 @@ const STORAGE_CATEGORIES = "avispate.categorias.v1"
 // borrados —recordatorio, adjunto, categoría y usuario— y ver y liberar el espacio que ocupan los
 // archivos en el dispositivo · 14: el envío real por WhatsApp y correo, con el estado de cada aviso
 // en Ajustes y un webhook que cuenta si el proveedor lo entregó).
-const APP_VERSION = "V2.0"
-const APP_STAGE = "Etapa 14"
+const APP_VERSION = "V2.1"
+const APP_STAGE = "Etapa 15"
 // Uso de la app: se guarda la última visita para poder avisar —una sola vez por hueco— cuando alguien
 // vuelve después de una semana o más sin abrir AVISPATE. Es el único aviso que no depende de un
 // recordatorio, así que vive aparte con su propia clave.
@@ -933,6 +941,34 @@ function loadEvents(): Reminder[] {
     }
   } catch {}
   return SAMPLE_EVENTS
+}
+
+// Aplica una bajada del motor sin tocar el orden de lo que ya estaba: las filas conocidas se
+// reemplazan en su lugar y las nuevas se agregan al final. Si no hay cambios de esa entidad devuelve
+// la misma lista, así React no vuelve a renderizar ni el efecto de guardado reescribe de más.
+function aplicarCambiosLista<T>(
+  lista: T[],
+  cambios: CambioSync[],
+  entidad: EntidadSync,
+  idDe: (item: T) => string,
+  normalizar?: (item: T, id: string) => T,
+): T[] {
+  const propios = cambios.filter((c) => c.entidad === entidad)
+  if (!propios.length) return lista
+
+  const mapa = new Map(lista.map((item) => [idDe(item), item]))
+  let toco = false
+  for (const cambio of propios) {
+    if (cambio.eliminadoEn) {
+      if (mapa.delete(cambio.id)) toco = true
+      continue
+    }
+    if (!cambio.payload || typeof cambio.payload !== "object") continue
+    const fila = cambio.payload as T
+    mapa.set(cambio.id, normalizar ? normalizar(fila, cambio.id) : fila)
+    toco = true
+  }
+  return toco ? Array.from(mapa.values()) : lista
 }
 
 function normalizeProfile(p: unknown, i: number): Profile {
@@ -6409,10 +6445,20 @@ function CuentaCard({
   cuenta,
   aviso,
   onSesion,
+  sync,
+  sincronizando,
+  avisoSync,
+  onSync,
+  onVinculo,
 }: {
   cuenta: Sesion | null
   aviso: string
   onSesion: (sesion: Sesion | null) => void
+  sync: ResumenSync
+  sincronizando: boolean
+  avisoSync: string
+  onSync: () => void
+  onVinculo: (vinculado: boolean) => void
 }) {
   const [correo, setCorreo] = useState(cuenta?.usuario.email ?? "")
   const [enviando, setEnviando] = useState(false)
@@ -6446,8 +6492,10 @@ function CuentaCard({
       setDispositivos(lista)
       setErrorDispositivos("")
       // La lista de la nube manda: si alguien desvinculó este teléfono desde otro lado, la tarjeta
-      // deja de decir «Vinculado» en la próxima revisión.
-      setVinculado(lista.some((d) => d.dispositivoId === dispositivo().id))
+      // deja de decir «Vinculado» en la próxima revisión y App apaga el motor.
+      const sigue = lista.some((d) => d.dispositivoId === dispositivo().id)
+      setVinculado(sigue)
+      onVinculo(sigue)
     }
     setRevisando(false)
   }
@@ -6495,11 +6543,14 @@ function CuentaCard({
     if (resultado.sesion) onSesion(resultado.sesion)
     if (resultado.ok) {
       setVinculado(true)
+      onVinculo(true)
       setMensaje({
         ok: true,
         texto: "Este teléfono quedó vinculado a tu cuenta.",
       })
       void cargarDispositivos(resultado.sesion ?? cuenta)
+      // El primer envío no espera al temporizador: al vincular, la persona ya quiere ver sus datos.
+      onSync()
     } else {
       setMensaje({
         ok: false,
@@ -6522,6 +6573,7 @@ function CuentaCard({
     if (resultado.sesion) onSesion(resultado.sesion)
     if (resultado.ok) {
       setVinculado(false)
+      onVinculo(false)
       setDispositivos((prev) =>
         prev.filter((d) => d.dispositivoId !== dispositivo().id),
       )
@@ -6545,6 +6597,7 @@ function CuentaCard({
     await cerrarSesion(cuenta)
     onSesion(null)
     setVinculado(false)
+    onVinculo(false)
     setDispositivos([])
     setSaliendo(false)
     setMensaje({
@@ -6602,6 +6655,54 @@ function CuentaCard({
                 <p className="text-[12px] text-emerald-600 dark:text-emerald-400 mt-3">
                   Este teléfono está vinculado a tu cuenta.
                 </p>
+                <div className="mt-3 rounded-2xl bg-stone-50 dark:bg-stone-800/60 p-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-[11px] font-bold uppercase tracking-widest text-stone-400">
+                      Sincronización
+                    </p>
+                    <span
+                      className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                        avisoSync || sync.ultima?.error
+                          ? "bg-red-100 dark:bg-red-500/20 text-red-700 dark:text-red-300"
+                          : sync.pendientes
+                            ? "bg-amber-100 dark:bg-amber-500/25 text-amber-700 dark:text-amber-300"
+                            : "bg-emerald-100 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300"
+                      }`}
+                    >
+                      {sincronizando
+                        ? "Sincronizando…"
+                        : avisoSync || sync.ultima?.error
+                          ? "Con aviso"
+                          : sync.pendientes
+                            ? `${sync.pendientes} pendiente${sync.pendientes === 1 ? "" : "s"}`
+                            : "Al día"}
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-stone-500 dark:text-stone-400 mt-2">
+                    {sincronizando
+                      ? "Subiendo y bajando cambios…"
+                      : avisoSync
+                        ? avisoSync
+                        : sync.ultima
+                          ? sync.ultima.ok
+                            ? `Última: ${fechaYHora(sync.ultima.cuando)} · ${sync.ultima.subidos} subidos, ${sync.ultima.bajados} bajados.`
+                            : sync.ultima.error ||
+                              "La última pasada no pudo completarse."
+                          : "Todavía no hubo una pasada. Se hace sola al guardar."}
+                  </p>
+                  <p className="text-[10px] text-stone-400 mt-1">
+                    Los adjuntos no viajan: quedan en el teléfono que los agregó.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={onSync}
+                    disabled={sincronizando}
+                    aria-label="Sincronizar la cuenta ahora"
+                    className="mt-2 w-full py-2 rounded-xl bg-stone-900 dark:bg-stone-100 text-white dark:text-stone-900 text-[12px] font-bold disabled:opacity-50"
+                  >
+                    {sincronizando ? "Sincronizando…" : "Sincronizar ahora"}
+                  </button>
+                </div>
                 <button
                   type="button"
                   onClick={desvincular}
@@ -6765,6 +6866,11 @@ function SettingsScreen({
   cuenta,
   avisoCuenta,
   onSesion,
+  sync,
+  sincronizando,
+  avisoSync,
+  onSync,
+  onVinculo,
 }: {
   events: Reminder[]
   dark: boolean
@@ -6789,6 +6895,11 @@ function SettingsScreen({
   cuenta: Sesion | null
   avisoCuenta: string
   onSesion: (sesion: Sesion | null) => void
+  sync: ResumenSync
+  sincronizando: boolean
+  avisoSync: string
+  onSync: () => void
+  onVinculo: (vinculado: boolean) => void
 }) {
   // Copia de seguridad: el archivo se elige acá mismo y antes de tocar nada se muestra qué trae y las
   // dos maneras de traerlo (combinar o reemplazar). El mensaje del final es del último intento
@@ -7546,6 +7657,11 @@ function SettingsScreen({
           cuenta={cuenta}
           aviso={avisoCuenta}
           onSesion={onSesion}
+          sync={sync}
+          sincronizando={sincronizando}
+          avisoSync={avisoSync}
+          onSync={onSync}
+          onVinculo={onVinculo}
         />
         <p className="text-[11px] font-bold uppercase tracking-widest text-stone-400 mb-2">
           Usuarios de este dispositivo
@@ -8888,6 +9004,132 @@ export default function App() {
     }
   }, [])
 
+  // Etapa 15, fase 3: sincronización. El vínculo es lo que habilita el motor; sin él, la cuenta
+  // puede estar abierta pero nada se sube ni se baja. `vinculado` se mantiene en estado porque la
+  // tarjeta puede vincular o desvincular sin que cambie la sesión.
+  const [vinculado, setVinculado] = useState(() =>
+    vinculadoEnEsteTelefono(cuenta),
+  )
+  const [vistaSync, setVistaSync] = useState<ResumenSync>(() =>
+    resumenSincronizacion(cuenta?.usuario.id ?? null),
+  )
+  const [sincronizando, setSincronizando] = useState(false)
+  const [avisoSync, setAvisoSync] = useState("")
+  const sincronizandoRef = useRef(false)
+  // La foto que se sube se lee de este ref, no de las dependencias del callback: así un cambio en los
+  // datos no reconstruye la función ni reinicia el temporizador de 45 segundos.
+  const datosSyncRef = useRef<FotoSync>({
+    recordatorios: events,
+    categorias: categories,
+    perfiles: profiles,
+  })
+  useEffect(() => {
+    datosSyncRef.current = {
+      recordatorios: events,
+      categorias: categories,
+      perfiles: profiles,
+    }
+  }, [events, categories, profiles])
+  // Solo cambia la identidad de la cuenta; una renovación de token no debe borrar el aviso de la
+  // última pasada ni volver a montar los temporizadores.
+  useEffect(() => {
+    setVinculado(vinculadoEnEsteTelefono(cuenta))
+    setVistaSync(resumenSincronizacion(cuenta?.usuario.id ?? null))
+    setAvisoSync("")
+  }, [cuenta?.usuario.id])
+
+  const sincronizar = useCallback(
+    async (manual = false) => {
+      if (!cuenta || !vinculadoEnEsteTelefono(cuenta) || sincronizandoRef.current)
+        return
+      sincronizandoRef.current = true
+      setSincronizando(true)
+      try {
+        const resultado = await sincronizarCuenta({
+          sesion: cuenta,
+          foto: datosSyncRef.current,
+          forzar: manual,
+        })
+        if (resultado.sesion) {
+          setCuenta((previa) =>
+            previa &&
+            previa.accessToken !== resultado.sesion?.accessToken
+              ? resultado.sesion!
+              : previa,
+          )
+        }
+        if (resultado.ok && resultado.cambios.length) {
+          setEvents((prev) =>
+            aplicarCambiosLista(
+              prev,
+              resultado.cambios,
+              "recordatorios",
+              (e) => e.id,
+              (e, id) => ({
+                ...e,
+                id,
+                ownerId: e.ownerId || DEFAULT_PROFILE_ID,
+              }),
+            ),
+          )
+          setCategories((prev) =>
+            aplicarCambiosLista(
+              prev,
+              resultado.cambios,
+              "categorias",
+              (c) => c.name,
+              (c, id) => ({ ...c, name: id || c.name }),
+            ),
+          )
+          setProfiles((prev) => {
+            const siguiente = aplicarCambiosLista(
+              prev,
+              resultado.cambios,
+              "perfiles",
+              (p) => p.id,
+              (p, id) => ({ ...p, id: id || p.id }),
+            )
+            // Un dispositivo nunca se queda sin usuarios: si la bajada borró el último, se conserva
+            // el que estaba para que Inicio siga teniendo a quién mostrar.
+            return siguiente.length ? siguiente : prev
+          })
+        }
+        setAvisoSync(resultado.ok ? "" : resultado.error || "")
+        setVistaSync(
+          resumenSincronizacion(
+            (resultado.sesion ?? cuenta).usuario.id,
+          ),
+        )
+      } finally {
+        sincronizandoRef.current = false
+        setSincronizando(false)
+      }
+    },
+    [cuenta],
+  )
+
+  // Un respiro de 1,2 s: guardar un recordatorio hace varios setState y no queremos un POST por
+  // tecla. Al terminar, cada cambio local ya está en la cola y se sube una sola vez.
+  useEffect(() => {
+    if (!vinculado || !cuenta) return
+    const timer = window.setTimeout(() => void sincronizar(false), 1200)
+    return () => window.clearTimeout(timer)
+  }, [vinculado, cuenta, events, categories, profiles, sincronizar])
+
+  // Además del disparo por cambio, una pasada cada 45 s y al recuperar la conexión: así un teléfono
+  // que quedó abierto ve lo que hizo el otro sin que haya que tocar nada.
+  useEffect(() => {
+    if (!vinculado || !cuenta) return
+    const intervalo = window.setInterval(() => void sincronizar(false), 45_000)
+    const alVolver = () => void sincronizar(false)
+    window.addEventListener("online", alVolver)
+    return () => {
+      window.clearInterval(intervalo)
+      window.removeEventListener("online", alVolver)
+    }
+  }, [vinculado, cuenta, sincronizar])
+
+
   // Relevo al cerrar el onboarding: mientras la abeja se despide y el velo se desvanece, el
   // inicio de la app se revela saliendo del desenfoque (ver BeeHandoff). El temporizador lo apaga.
   const [handoff, setHandoff] = useState(false)
@@ -9965,6 +10207,11 @@ export default function App() {
                 setCuenta(sesion)
                 if (sesion) setAvisoCuenta("")
               }}
+              sync={vistaSync}
+              sincronizando={sincronizando}
+              avisoSync={avisoSync}
+              onSync={() => void sincronizar(true)}
+              onVinculo={setVinculado}
             />
           )}
           {screen === "tips" && (

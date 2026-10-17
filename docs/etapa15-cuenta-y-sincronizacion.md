@@ -1,8 +1,9 @@
 # Etapa 15 · Cuenta y sincronización entre teléfonos (V2.1)
 
-Estado: **en curso**. Esta entrega (Fase 1) deja la identidad, el vínculo del dispositivo y la RLS.
-El motor de sincronización, los adjuntos y la lista de dispositivos con cierre remoto son las fases
-siguientes.
+Estado: **fases 1, 2 y 3 terminadas**. La cuenta, el esquema por entidad y el motor de
+sincronización ya funcionan; la lista de dispositivos con cierre remoto (fase 4), los adjuntos en
+Storage y Realtime quedan para las próximas entregas. El motor sigue siendo opcional: sin cuenta,
+AVISPATE funciona igual que siempre.
 
 ## Objetivo
 
@@ -16,8 +17,10 @@ sigue funcionando sola**, y el modo invitado sigue existiendo.
    como hoy: todo en `localStorage`, con copias de seguridad.
 2. **Enlace mágico, sin contraseña.** Supabase Auth manda un correo; el enlace vuelve a la app con
    los tokens en el hash. No hay pantalla de contraseña que olvidar ni secreto extra en el bundle.
-3. **Invitado → cuenta sin duplicar.** «Reclamar este teléfono» vincula el dispositivo y —cuando
-   exista el motor— sube lo que ya hay con ids estables, así no se duplica nada.
+3. **Invitado → cuenta sin duplicar.** «Vincular este teléfono» reclama el dispositivo y la primera
+   pasada sube lo que ya hay con ids estables: los recordatorios, las categorías y los perfiles
+   conservan su id, así que no se duplica nada. Antes de subir, esa primera pasada baja lo remoto para
+   que los valores de fábrica de un teléfono nuevo no pisen una cuenta que ya tiene datos.
 4. **La identidad no es permiso.** Saber un `user_id` no alcanza: las escrituras pasan por funciones
    que comprueban `auth.uid()` y, para el alta, el token del dispositivo. Las tablas tienen RLS.
 5. **La sesión es del dispositivo, no del respaldo.** `avispate.cuenta.v1` no entra en las copias de
@@ -31,6 +34,8 @@ sigue funcionando sola**, y el modo invitado sigue existiendo.
 | `perfiles_cuenta` | `user_id`, nombre visible, fechas | Disparador al crear la cuenta |
 | `dispositivos_cuenta` | `(user_id, dispositivo_id)`, `reclamado_en`, `ultima_conexion` | `reclamar_dispositivo` / `desvincular_dispositivo` |
 | `dispositivos` (Etapa 10) | Id, token, nombre y push del teléfono | `registrar_dispositivo` |
+| `recordatorios`, `categorias`, `perfiles`, `ajustes`, `marcas` | `(user_id, id)` + el contenido en `payload` + `updated_at`, `deleted_at`, `revision`, `dispositivo_id`, `seq` | Solo `subir_cambios` |
+| `tumbas` | Índice de borrados por entidad, para no bajar la tabla entera | Solo `subir_cambios`; se limpia con `purgar_tumbas` |
 
 Reglas:
 
@@ -43,7 +48,7 @@ Reglas:
 
 ## Fases
 
-### Fase 1 · Identidad y vínculo (esta entrega)
+### Fase 1 · Identidad y vínculo (terminada)
 
 - `src/lib/cuenta.ts`: pedir el enlace, procesar el hash, guardar/renovar/cerrar sesión, reclamar y
   desvincular el teléfono, listar dispositivos. Sin SDK y sin excepciones: siempre `{ ok }`.
@@ -54,48 +59,59 @@ Reglas:
 - Suite `tests/e2e-cuenta.mjs`: enlace feliz y vencido, correo inválido, modo sin red, sesión
   persistida, vínculo, desvínculo, cierre de sesión y las comprobaciones estáticas de la migración.
 
-**Terminada cuando:** una persona puede crear la cuenta desde Ajustes, volver con el enlace, ver su
-cuenta en otro arranque, vincular el teléfono y cerrar sesión; y un usuario no puede leer ni escribir
-lo de otro (prueba SQL negativa).
+### Fase 2 · Esquema por entidad y RLS (terminada)
 
-### Fase 2 · Esquema por entidad y RLS
+- `0005_etapa15_datos.sql`: `recordatorios`, `categorias`, `perfiles`, `ajustes`, `marcas` y el índice
+  de borrados `tumbas`, con `(user_id, id)`, `payload` completo, `updated_at`, `deleted_at`,
+  `revision`, `dispositivo_id` y `seq`.
+- `seq` sale de una secuencia compartida: el cursor es un número y no una fecha, así que dos cambios
+  en el mismo milisegundo no se pisan.
+- RLS por usuario en todas las tablas; `anon` no puede leer ni escribir. Las funciones del motor
+  exigen además el token del dispositivo vinculado.
+- Las copias de la Etapa 13/14 se pueden subir con sus ids: una fila con el mismo id se actualiza, no
+  se duplica.
 
-- Tablas `recordatorios`, `categorias`, `perfiles`, `ajustes`, `marcas` y `tumbas` con `user_id`,
-  `id` estable, `updated_at`, `deleted_at` y `revision`.
-- Claves compuestas `(user_id, id)`; los ids que ya genera el teléfono se conservan.
-- RLS por usuario en todas; pruebas negativas con dos cuentas y dos dispositivos.
-- Compatibilidad con las copias de la Etapa 13/14: una cuenta nueva se puede crear desde un `.json`
-  sin perder datos.
+### Fase 3 · Motor de sincronización (terminada; adjuntos y Realtime pendientes)
 
-### Fase 3 · Motor de sincronización
-
-- **Cola de salida por dispositivo**: cada cambio local entra como operación con id propio y se
-  reintenta con espera creciente. La cola sobrevive a recargas (IndexedDB, no `localStorage`).
-- **Cursor de bajada** por dispositivo: el servidor asigna un `seq` creciente y el cliente pide
-  «dame lo nuevo desde `seq`». Realtime se usa para lo urgente; el cursor sigue siendo la verdad.
-- **Tumbas**: borrar deja `deleted_at` y `revision`; se purgan a los 90 días. El «Deshacer» local
-  sigue funcionando antes de que la tumba salga del teléfono.
-- **Conflictos por campo**: gana el `updated_at` más nuevo; si empatan, el `dispositivo_id` mayor;
-  si también empatan, el hash del valor. Nunca se pierde un cambio por orden de llegada.
-- **Adjuntos** en Supabase Storage con límite de tamaño, URL firmada y limpieza al borrar la última
-  referencia. Los archivos viajan después de la fila que los referencia.
+- `src/lib/sync.ts` guarda una **cola de salida por cuenta y dispositivo** en
+  `localStorage` (`avispate.sync.v1`): operación con entidad, id, payload y hora. Es deliberado: el
+  resto de AVISPATE ya persiste ahí y así la cola sobrevive recargas sin abrir otra base. El costo es
+  que el tamaño lo limita el navegador; para adjuntos habrá que moverlos a Storage, no a la cola.
+- La cola se sube en **tandas de 200** (el máximo del servidor) y como máximo 10 tandas por pasada:
+  una cola enorme no bloquea la app para siempre; la siguiente pasada sigue donde quedó.
+- **Cursor de bajada** por cuenta y dispositivo: `bajar_cambios` devuelve las filas con `seq` mayor
+  que el cursor, ordenadas y paginadas de 200 en 200. Si una página llega llena, el cliente pide la
+  siguiente; el cursor solo avanza hasta el mayor `seq` aplicado.
+- **Primera pasada:** baja antes de subir. Así un teléfono nuevo no manda los valores de fábrica
+  encima de una cuenta que ya tiene datos. En las demás pasadas se sube y después se baja.
+- **Tumbas:** borrar deja `deleted_at`; el cliente guarda la marca para no volver a subir la fila
+  como viva. El «Deshacer» local funciona antes de que la tumba salga del teléfono.
+- **Conflictos:** gana el `updated_at` más nuevo; si empatan, el `dispositivo_id` mayor; si también
+  empatan, el `md5(payload)` mayor. La regla vive igual en el cliente y en el `on conflict` del
+  servidor, así que dos teléfonos convergen al mismo resultado.
+- **Disparadores:** 1,2 s después de un cambio local, cada 45 s mientras hay cuenta, y al volver la
+  conexión (`online`). El botón «Sincronizar ahora» fuerza una pasada y muestra el resultado en la
+  tarjeta **Sincronización**. Una pasada a la vez por pestaña.
+- **Adjuntos** en Supabase Storage: pendientes. Hoy viajan los payloads; una foto referenciada por
+  URL no se sube todavía. La fila que la referencia no debe llegar antes que el archivo, y esa parte
+  queda para la fase de adjuntos.
 
 ### Fase 4 · Dispositivos y sesiones
 
-- «Última conexión» real (no solo el momento del vínculo), nombre editable y botón para cerrar
-  sesión en uno o en todos.
+- La última conexión ya se actualiza con cada subida o bajada real; falta poder editar el nombre del
+  teléfono y un botón para cerrar sesión en uno o en todos.
 - Al cerrar sesión: conservar o borrar la copia local, con una explicación clara.
 - Realtime para que la lista se actualice cuando entra otro teléfono.
 
-## Reglas de conflicto (borrador para la Fase 3)
+## Reglas de conflicto (implementadas en la Fase 3)
 
 | Caso | Resultado |
 | --- | --- |
-| Edición en A y edición en B sin red | Gana el `updated_at` mayor; el perdedor queda en el historial local de la app, no se descarta en silencio. |
+| Edición en A y edición en B sin red | Gana el `updated_at` mayor. El perdedor se sobrescribe: todavía no hay historial de versiones; para no perder trabajo, conviene no editar el mismo recordatorio en dos teléfonos a la vez. |
 | Borrado en A, edición en B | Gana la operación más nueva. Si gana la edición, la fila revive; si gana el borrado, queda la tumba. |
-| Mismo `updated_at` | Desempate por `dispositivo_id` y luego por hash del contenido: determinista en los dos teléfonos. |
+| Mismo `updated_at` | Desempate por `dispositivo_id` y luego por `md5(payload)`: da el mismo resultado en los dos teléfonos. |
 | Reclamar un teléfono que ya tenía datos | Los ids son los mismos: `upsert`, no copia. Las filas idénticas no generan operaciones. |
-| Cerrar sesión y volver a entrar | La sesión nueva baja desde el cursor guardado; si el cursor se perdió, bajada completa y merge por ids. |
+| Cerrar sesión y volver a entrar | La sesión nueva baja desde el cursor guardado de esa cuenta y ese dispositivo; si el cursor se perdió, bajada completa y merge por ids. |
 
 ## Seguridad
 
@@ -105,6 +121,29 @@ lo de otro (prueba SQL negativa).
 - La sesión (access + refresh) vive en `localStorage`; es el compromiso habitual de una SPA sin
   backend propio. Si más adelante se quiere cookie `HttpOnly`, hace falta un backend intermedio.
 - Los secretos de proveedores siguen solo en Supabase; el bundle únicamente lleva la anon key.
+
+## Pruebas
+
+- `tests/e2e-sync.mjs` (se descubre solo en `npm test`): subida inicial, bajada remota, mismo
+  `updated_at` con desempate por dispositivo, tumba remota, caída de red, borrado local y una cola de
+  205 recordatorios que se parte en tandas y se vuelve a bajar paginada.
+- `supabase/tests/0005_negativo.sql`: dos cuentas, RLS, token incorrecto, dispositivo no vinculado,
+  `anon`, borrado lógico y desempate por dispositivo en el servidor. Se ejecuta a mano con
+  `psql`/el SQL Editor después de aplicar la migración.
+- `npx tsc --noEmit` y `npm run build` tienen que quedar limpios; la batería usa el `dist/` recién
+  construido y avisa si está viejo.
+
+## Limitaciones conocidas
+
+- **Adjuntos:** las fotos referenciadas por URL todavía no se suben a Storage.
+- **Realtime:** no está conectado; entre pasadas, los cambios de otro teléfono pueden tardar hasta
+  45 s (o hasta que se pulse «Sincronizar ahora»).
+- **Historial:** el conflicto perdedor no se guarda. Gana la regla LWW y el otro valor se sobrescribe.
+- **Purga de tumbas:** `purgar_tumbas` borra las filas y las marcas con más de 90 días. Un teléfono
+  que estuvo más de 90 días sin abrir puede perder la noticia de un borrado antiguo y necesita una
+  restauración completa; todavía no hay un botón que la dispare.
+- **Tamaño:** la cola y los payloads viven en `localStorage`; un cambio se rechaza en el servidor si
+  supera 256 KB. Los recordatorios normales entran de sobra, pero no es el lugar para archivos.
 
 ## Lo que falta decidir
 

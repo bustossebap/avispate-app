@@ -1,4 +1,4 @@
-// E2E de la Etapa 15 (primera entrega): cuenta por enlace mágico y vínculo del dispositivo.
+// E2E de la Etapa 15 (fase 1): cuenta por enlace mágico y vínculo del dispositivo.
 //
 // Lo que se prueba sin un Supabase de verdad: que el modo invitado no cambie, que el correo se valide
 // antes de salir, que el enlace vuelva a la app y deje la sesión guardada, que el hash se limpie, que
