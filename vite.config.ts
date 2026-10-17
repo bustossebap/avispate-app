@@ -1,4 +1,4 @@
-import { defineConfig, type HtmlTagDescriptor, type Plugin } from 'vite'
+import { defineConfig, loadEnv, type HtmlTagDescriptor, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import path from 'node:path'
@@ -11,6 +11,10 @@ import siteConfiguration from './.figma/make/site.json' with { type: 'json' }
 export default defineConfig(({ mode, command }) => {
   // .figma/make/deploy-preview passes `--mode development` for cached-preview builds.
   const emitSourcemaps = mode === 'development'
+  // El service worker es un archivo estático y no ve `import.meta.env`: para que pueda posponer un aviso
+  // desde la notificación con la app cerrada (Etapa 11) se le inyectan la URL y la anon key de Supabase,
+  // que son exactamente las mismas que ya viajan en el bundle (la anon es pública por diseño).
+  const env = loadEnv(mode, import.meta.dirname, '')
   // En el build el `base` va relativo a propósito: así `dist/` se puede servir desde cualquier raíz
   // —Live Server con `dist/` como raíz, o cualquier servidor estático— sin que se rompan los
   // `./assets/…`. Publicado en la raíz de Vercel (o de cualquier host) se comporta igual que antes,
@@ -30,7 +34,10 @@ export default defineConfig(({ mode, command }) => {
     plugins: [
       react(),
       tailwindcss(),
-      avispateServiceWorker(),
+      avispateServiceWorker({
+        url: env.VITE_SUPABASE_URL || '',
+        clave: env.VITE_SUPABASE_ANON_KEY || '',
+      }),
       figmaSiteConfiguration(siteConfiguration),
       figmaErrorOverlayReplay(),
       figmaReactRefreshBoundaryFallback(),
@@ -88,7 +95,10 @@ type FigmaSiteConfiguration = {
  * Va acá y no en un paquete aparte porque es una sola página de código: el archivo legible está en
  * `src/pwa/service-worker.js` y este plugin solo le inyecta lo que únicamente el build sabe.
  */
-function avispateServiceWorker(): Plugin {
+function avispateServiceWorker(nube: { url: string; clave: string }): Plugin {
+  // Los dos valores van entre comillas dobles en la plantilla: se escapan por si alguno trae una
+  // comilla o una barra invertida (no debería, pero romper el sw.js por eso sería peor).
+  const literal = (valor: string) => valor.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
   return {
     name: 'avispate-service-worker',
     apply: 'build',
@@ -102,6 +112,8 @@ function avispateServiceWorker(): Plugin {
       const fuente = plantilla
         .replace(/__SELLO__/g, sello)
         .replace(/__ARCHIVOS__/g, JSON.stringify(archivos))
+        .replace(/__NUBE_URL__/g, () => literal(nube.url))
+        .replace(/__NUBE_CLAVE__/g, () => literal(nube.clave))
       this.emitFile({ type: 'asset', fileName: 'sw.js', source: fuente })
     },
   }

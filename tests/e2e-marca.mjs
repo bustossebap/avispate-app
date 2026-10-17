@@ -171,8 +171,8 @@ check(
   await wait(150)
   await m.irAjustes()
   check(
-    "D · el pie de Ajustes dice AVISPATE · V1.7 · Etapa 10",
-    m.txt().includes("AVISPATE · V1.7 · Etapa 10"),
+    "D · el pie de Ajustes dice AVISPATE · V1.8 · Etapa 11",
+    m.txt().includes("AVISPATE · V1.8 · Etapa 11"),
     JSON.stringify(m.txt().slice(-220)),
   )
   m.clickText("button", "Ver tips")

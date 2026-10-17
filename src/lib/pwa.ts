@@ -4,6 +4,7 @@
 // pregunta primero y se devuelve un estado claro en vez de romper.
 import {
   CLAVE_PUSH,
+  dispositivo,
   nubeLista,
   olvidarDispositivo,
   registrarDispositivo,
@@ -67,6 +68,19 @@ export function haySoporte() {
   )
 }
 
+// Etapa 11: el service worker necesita el id y el token del dispositivo para posponer un aviso desde la
+// propia notificación, con la app cerrada. No puede leer el localStorage de la página (del otro lado
+// del service worker no existe), así que se los pasa por mensaje y él los guarda en IndexedDB.
+function compartirCredenciales(registro: ServiceWorkerRegistration) {
+  const destino =
+    registro.active ?? registro.waiting ?? registro.installing ?? null
+  if (!destino) return
+  try {
+    const { id, token } = dispositivo()
+    destino.postMessage({ tipo: "CREDENCIALES", dispositivo: id, token })
+  } catch {}
+}
+
 // El service worker se registra solo en la entrega compilada: en `npm run dev` los archivos cambian a
 // cada rato y un service worker viejo sirviendo el armado anterior confunde más de lo que ayuda. Para
 // probar los avisos: `npm run build && npm run preview`.
@@ -74,6 +88,12 @@ export async function registrarSW() {
   if (!import.meta.env.PROD || !swDisponible()) return
   try {
     registroActual = await navigator.serviceWorker.register("./sw.js")
+    compartirCredenciales(registroActual)
+    // En la primera visita el worker puede no estar activo todavía: cuando lo esté, se manda de nuevo
+    // (es idempotente, solo reescribe el mismo par id/token).
+    void navigator.serviceWorker.ready
+      .then((registro) => compartirCredenciales(registro))
+      .catch(() => {})
   } catch {
     registroActual = null
   }
@@ -232,6 +252,9 @@ export async function activarAvisos(): Promise<ResultadoAvisos> {
     return { estado: "pendiente", error: alta.error }
   }
   marcarSuscripcion(true)
+  // Con la suscripción viva, el service worker ya puede posponer desde la notificación: se le dejan
+  // las credenciales del dispositivo (ver compartirCredenciales).
+  compartirCredenciales(registro)
   return { estado: "activo" }
 }
 

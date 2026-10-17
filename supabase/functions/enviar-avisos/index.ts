@@ -80,6 +80,9 @@ Deno.serve(async (peticion) => {
           cuerpo: fila.cuerpo,
           tag: fila.id,
           url: "./",
+          // El id de la fila: es lo que el service worker manda a `posponer_aviso` cuando alguien toca
+          // «Posponer 10 min» o «Posponer 1 hora» sin abrir la app (Etapa 11).
+          aviso: fila.id,
         }),
         // 12 h de vigencia y urgencia alta: es un recordatorio, no un boletín. Si el teléfono estuvo
         // apagado dos días, el aviso viejo ya no sirve.

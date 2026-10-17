@@ -18,8 +18,16 @@ import {
   offsetLabel,
   unitText,
 } from "./lib/avisos"
-import { programarAvisos } from "./lib/cola"
-import { pedirAvisoDePrueba, sincronizarCola } from "./lib/nube"
+import { buscarRecordatorios, hayConsulta } from "./lib/buscar"
+import { programarAvisos, type AvisoProgramado } from "./lib/cola"
+import {
+  explicarErrorNube,
+  pedirAvisoDePrueba,
+  resumenCola,
+  sincronizarCola,
+  ultimaSubida,
+  type ResumenCola,
+} from "./lib/nube"
 import {
   activarAvisos,
   activarVersionNueva,
@@ -150,9 +158,10 @@ const STORAGE_CATEGORIES = "avispate.categorias.v1"
 // de RECUERDA a AVISPATE, con sus claves guardadas renombradas y migradas · 8: la app publicada en
 // avispate-app.vercel.app y la batería en vivo arreglada (los assets con `./`) · 9: la copia de
 // seguridad, que saca y devuelve todo en un .json · 10: los avisos con la app cerrada (push + nube de
-// Supabase) y AVISPATE instalable en el teléfono).
-const APP_VERSION = "V1.7"
-const APP_STAGE = "Etapa 10"
+// Supabase) y AVISPATE instalable en el teléfono · 11: la búsqueda en Inicio, posponer desde la
+// notificación y la salud de la cola en Ajustes).
+const APP_VERSION = "V1.8"
+const APP_STAGE = "Etapa 11"
 // Uso de la app: se guarda la última visita para poder avisar —una sola vez por hueco— cuando alguien
 // vuelve después de una semana o más sin abrir AVISPATE. Es el único aviso que no depende de un
 // recordatorio, así que vive aparte con su propia clave.
@@ -3625,11 +3634,24 @@ function HomeScreen({
     setOpenUsers(false)
   }
   const [categoryFilter, setCategoryFilter] = useState("Todas")
+  // Búsqueda (Etapa 11): la lupa abre un campo y lo escrito filtra lo que la pantalla ya mostraba (la
+  // categoría elegida incluida). Vive en esta pantalla y no en App: al cambiar de pestaña y volver, el
+  // campo arranca cerrado, así no queda un filtro invisible puesto.
+  const [buscando, setBuscando] = useState(false)
+  const [busqueda, setBusqueda] = useState("")
+  const hayTexto = hayConsulta(busqueda)
+  const cerrarBusqueda = () => {
+    setBuscando(false)
+    setBusqueda("")
+  }
   const filtered =
     categoryFilter === "Todas"
       ? events
       : events.filter((e) => e.category === categoryFilter)
-  const active = filtered
+  // La búsqueda no reordena ni cambia la categoría: solo achica la lista. El orden sigue siendo el de
+  // siempre (por fecha), y lo vencido que coincide aparece arriba, que es donde uno lo busca.
+  const visibles = buscarRecordatorios(filtered, busqueda)
+  const active = visibles
     .filter((e) => !e.completed)
     .sort(
       (a, b) =>
@@ -3660,6 +3682,32 @@ function HomeScreen({
             </h1>
           </div>
           <div className="flex items-center gap-1 flex-shrink-0">
+            {/* La lupa abre el campo de búsqueda. Cuando está abierta se pinta como la campana abierta
+                —fondo ámbar suave— para que se entienda que esta pantalla está filtrada. */}
+            <button
+              type="button"
+              aria-label="Buscar"
+              aria-expanded={buscando}
+              onClick={() => (buscando ? cerrarBusqueda() : setBuscando(true))}
+              className={`w-11 h-11 rounded-2xl flex items-center justify-center active:scale-95 transition-colors ${
+                buscando || hayTexto
+                  ? "bg-amber-100/80 dark:bg-amber-500/25 text-amber-800 dark:text-amber-200"
+                  : "text-stone-700 dark:text-stone-100"
+              }`}
+            >
+              <svg
+                viewBox="0 0 20 20"
+                aria-hidden="true"
+                className="w-[21px] h-[21px]"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth={2}
+                strokeLinecap="round"
+              >
+                <circle cx="8.5" cy="8.5" r="5.5" />
+                <path d="M12.6 12.6 17 17" />
+              </svg>
+            </button>
             {/* De vuelta la campana simple —ni avispa ni zumbido— y sin burbuja: es un control libre sobre
             el fondo, para que no se lea como las categorías que están justo abajo. */}
             <div className="relative flex-shrink-0">
@@ -3875,6 +3923,50 @@ function HomeScreen({
           )}
         </div>
       </div>
+      {/* El campo de búsqueda, debajo de la cabecera y arriba de las categorías: se escribe y la lista
+          de abajo se achica sola. La × cierra la búsqueda y borra lo escrito, igual que Escape. */}
+      {buscando && (
+        <div className="px-5 pb-3">
+          <div className="relative">
+            <span
+              aria-hidden="true"
+              className="absolute left-3.5 top-1/2 -translate-y-1/2 text-stone-400"
+            >
+              <svg
+                viewBox="0 0 20 20"
+                className="w-4 h-4"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth={2}
+                strokeLinecap="round"
+              >
+                <circle cx="8.5" cy="8.5" r="5.5" />
+                <path d="M12.6 12.6 17 17" />
+              </svg>
+            </span>
+            <input
+              autoFocus
+              type="search"
+              value={busqueda}
+              onChange={(e) => setBusqueda(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") cerrarBusqueda()
+              }}
+              placeholder="Nombre, nota o categoría"
+              aria-label="Buscar recordatorios"
+              className="w-full bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-800 rounded-2xl pl-10 pr-11 py-3 text-[16px] font-semibold text-stone-800 dark:text-stone-100 placeholder:font-normal placeholder:text-stone-400 outline-none focus:border-amber-400"
+            />
+            <button
+              type="button"
+              aria-label="Limpiar búsqueda"
+              onClick={cerrarBusqueda}
+              className="absolute right-2 top-1/2 -translate-y-1/2 w-8 h-8 rounded-xl text-stone-400 flex items-center justify-center active:scale-95"
+            >
+              <span className="text-[20px] leading-none">×</span>
+            </button>
+          </div>
+        </div>
+      )}
       <div className="px-5 pb-3">
         <div className="flex gap-2 overflow-x-auto pb-1 -mx-1 px-1 scrollbar-none">
           {[{ name: "Todas", emoji: "✦" }, ...categories].map((cat) => (
@@ -3910,34 +4002,78 @@ function HomeScreen({
           </button>
         </div>
       </div>
-      <div className="px-5 pb-3">
-        <div className="flex bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-800 rounded-full p-1">
-          <button
-            type="button"
-            onClick={() => setView("vigentes")}
-            className={`flex-1 py-2 rounded-full text-[13px] font-bold transition-colors ${
-              view === "vigentes"
-                ? "bg-amber-600 text-white"
-                : "text-stone-500 dark:text-stone-400"
-            }`}
-          >
-            Vigentes
-          </button>
-          <button
-            type="button"
-            onClick={() => setView("vencidos")}
-            className={`flex-1 py-2 rounded-full text-[13px] font-bold transition-colors ${
-              view === "vencidos"
-                ? "bg-amber-600 text-white"
-                : "text-stone-500 dark:text-stone-400"
-            }`}
-          >
-            Vencidos
-          </button>
+      {/* Con una búsqueda escrita, el conmutador Vigentes/Vencidos desaparece: los resultados se
+          muestran en una sola lista, ordenada por fecha, y lo vencido que coincide queda arriba. */}
+      {!hayTexto && (
+        <div className="px-5 pb-3">
+          <div className="flex bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-800 rounded-full p-1">
+            <button
+              type="button"
+              onClick={() => setView("vigentes")}
+              className={`flex-1 py-2 rounded-full text-[13px] font-bold transition-colors ${
+                view === "vigentes"
+                  ? "bg-amber-600 text-white"
+                  : "text-stone-500 dark:text-stone-400"
+              }`}
+            >
+              Vigentes
+            </button>
+            <button
+              type="button"
+              onClick={() => setView("vencidos")}
+              className={`flex-1 py-2 rounded-full text-[13px] font-bold transition-colors ${
+                view === "vencidos"
+                  ? "bg-amber-600 text-white"
+                  : "text-stone-500 dark:text-stone-400"
+              }`}
+            >
+              Vencidos
+            </button>
+          </div>
         </div>
-      </div>
+      )}
       <div className="flex-1 overflow-y-auto px-5 pb-28">
-        {view === "vigentes" ? (
+        {hayTexto ? (
+          active.length === 0 ? (
+            // Nadie encontró nada: la abeja lo dice sin dramatizar y deja el botón para volver a la
+            // lista completa, que es lo que uno quiere después de escribir mal una palabra.
+            <div className="flex flex-col items-center py-16 text-center">
+              <span className="text-5xl mb-4">🐝</span>
+              <h3 className="font-bold text-[18px] text-stone-800 dark:text-stone-100">
+                Nada por acá
+              </h3>
+              <p className="text-stone-400 text-[14px] mt-2 mb-6">
+                No hay recordatorios que digan «{busqueda.trim()}».
+              </p>
+              <button
+                onClick={cerrarBusqueda}
+                className="px-6 py-3 bg-amber-600 text-white rounded-xl font-semibold text-[14px]"
+              >
+                Limpiar búsqueda
+              </button>
+            </div>
+          ) : (
+            <section className="mb-6">
+              <div className="flex items-center gap-2 mb-3">
+                <h2 className="text-[11px] font-bold tracking-widest text-stone-400 uppercase">
+                  Resultados
+                </h2>
+                <span className="text-[11px] font-semibold text-amber-500 dark:text-amber-300">
+                  {active.length}{" "}
+                  {active.length === 1 ? "recordatorio" : "recordatorios"}
+                </span>
+              </div>
+              {active.map((e) => (
+                <EventCard
+                  key={e.id}
+                  event={e}
+                  clock12={clock12}
+                  onClick={() => onEventClick(e.id)}
+                />
+              ))}
+            </section>
+          )
+        ) : view === "vigentes" ? (
           active.length === 0 ? (
             <div className="flex flex-col items-center py-16 text-center">
               <span className="text-5xl mb-4">✨</span>
@@ -6041,6 +6177,41 @@ function HistorialScreen({
 // Ajustes trabaja siempre sobre el usuario activo: su nombre y emoji, su contacto (WhatsApp y
 // correo), sus canales y su conexión con Google Calendar. onUpdateProfile guarda cada cambio en ese
 // perfil, así que lo que se configura para un usuario no cambia nada en los demás.
+// La cola tal como quedó guardada en este teléfono. Se lee sin romper nada: si la clave falta o tiene
+// basura (una versión vieja, un almacenamiento a medio escribir), se devuelve vacío.
+function colaGuardada(): AvisoProgramado[] {
+  try {
+    const crudo = localStorage.getItem(STORAGE_COLA)
+    const datos = crudo ? JSON.parse(crudo) : []
+    return Array.isArray(datos) ? (datos as AvisoProgramado[]) : []
+  } catch {
+    return []
+  }
+}
+
+// «hace 3 min» para la última subida. No hace falta un reloj propio: Ajustes se vuelve a dibujar cuando
+// cambia cualquier cosa de la pantalla, y con leer la hora al dibujar alcanza para lo que se busca.
+function haceRato(iso?: string) {
+  if (!iso) return ""
+  const minutos = Math.round((Date.now() - new Date(iso).getTime()) / 60000)
+  if (!Number.isFinite(minutos)) return ""
+  if (minutos <= 0) return "hace un momento"
+  if (minutos < 60) return `hace ${minutos} min`
+  const horas = Math.round(minutos / 60)
+  if (horas < 24) return `hace ${horas} h`
+  const dias = Math.round(horas / 24)
+  return `hace ${dias} ${dias === 1 ? "día" : "días"}`
+}
+
+function fechaYHora(iso: string) {
+  return new Date(iso).toLocaleString("es-CL", {
+    day: "numeric",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+  })
+}
+
 function SettingsScreen({
   events,
   dark,
@@ -6230,7 +6401,12 @@ function SettingsScreen({
                 cola.length === 1 ? "aviso programado" : "avisos programados"
               } para este dispositivo.`,
             }
-          : { ok: false, texto: subida.error || "No se pudo subir la cola a la nube." },
+          : {
+              ok: false,
+              texto:
+                explicarErrorNube(subida.error) ||
+                "No se pudo subir la cola a la nube.",
+            },
       )
     } else if (resultado.error) {
       setAvisoMensaje({ ok: false, texto: resultado.error })
@@ -6262,6 +6438,72 @@ function SettingsScreen({
     )
     setAvisoOcupado(false)
   }
+  // ------------------------------------------- Salud de la cola (Etapa 11)
+  // Tres respuestas en una tarjeta: qué calculó y guardó este teléfono, qué tiene la nube y cuándo se
+  // subió por última vez. Sirve para distinguir «no hay nada programado» de «hay algo pero no llegó».
+  const [resumen, setResumen] = useState<ResumenCola | null>(null)
+  const [resumenError, setResumenError] = useState<string | null>(null)
+  const [revisando, setRevisando] = useState(false)
+  const [mensajeCola, setMensajeCola] = useState<{
+    ok: boolean
+    texto: string
+  } | null>(null)
+  const colaLocal = colaGuardada()
+  const proximoLocal = colaLocal.find(
+    (a) => new Date(a.cuando).getTime() > Date.now(),
+  )
+  const subida = ultimaSubida()
+  const refrescarResumen = async () => {
+    if (estadoAvisosAhora !== "activo") return
+    const resultado = await resumenCola()
+    if (resultado.ok) {
+      setResumen(resultado.datos ?? null)
+      setResumenError(null)
+    } else {
+      setResumen(null)
+      setResumenError(resultado.error || "No se pudo leer la cola de la nube.")
+    }
+  }
+  useEffect(() => {
+    void refrescarResumen()
+  }, [estadoAvisosAhora])
+  const revisarCola = async () => {
+    setRevisando(true)
+    setMensajeCola(null)
+    // Se recalcula igual que en App: la tarjeta no inventa una cola distinta de la que de verdad existe.
+    const cola = programarAvisos(events)
+    try {
+      localStorage.setItem(STORAGE_COLA, JSON.stringify(cola))
+    } catch {}
+    const envio = await sincronizarCola(cola)
+    setMensajeCola(
+      envio.ok
+        ? {
+            ok: true,
+            texto: `Listo: ${cola.length} ${
+              cola.length === 1 ? "aviso subido" : "avisos subidos"
+            } a la nube.`,
+          }
+        : {
+            ok: false,
+            texto:
+              explicarErrorNube(envio.error) ||
+              "No se pudo subir la cola a la nube.",
+          },
+    )
+    await refrescarResumen()
+    setRevisando(false)
+  }
+  const textoNubeCola =
+    estadoAvisosAhora !== "activo"
+      ? "sin suscripción en este dispositivo"
+      : resumenError
+        ? resumenError
+        : resumen
+          ? `${resumen.pendientes} por enviar · ${resumen.enviados} enviados${
+              resumen.conError ? ` · ${resumen.conError} con error` : ""
+            }`
+          : "consultando…"
   const textoAvisos =
     estadoAvisosAhora === null
       ? "Revisando este dispositivo…"
@@ -6951,6 +7193,78 @@ function SettingsScreen({
               aplicación».
             </p>
           )}
+        </div>
+        {/* Salud de la cola (Etapa 11): lo que el teléfono calculó, lo que la nube tiene y cuándo se
+            subió. Es la forma de contestar «¿esto va a avisar de verdad?» sin abrir Supabase. */}
+        <div className="bg-white dark:bg-stone-900 rounded-3xl p-5 border border-stone-100 dark:border-stone-800 mb-4">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p className="font-semibold text-[14px]">Salud de la cola</p>
+              <p className="text-[12px] text-stone-400 mt-1" aria-live="polite">
+                {colaLocal.length === 0
+                  ? "Este teléfono no tiene avisos programados."
+                  : `${colaLocal.length} ${
+                      colaLocal.length === 1
+                        ? "aviso programado"
+                        : "avisos programados"
+                    } en este teléfono`}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={revisarCola}
+              disabled={revisando}
+              className="px-3 py-2 rounded-xl bg-amber-50 dark:bg-amber-500/20 text-amber-700 dark:text-amber-300 text-[12px] font-bold flex-shrink-0 disabled:opacity-50"
+            >
+              {revisando ? "Revisando…" : "Revisar ahora"}
+            </button>
+          </div>
+          <dl className="mt-3 pt-3 border-t border-stone-50 dark:border-stone-800 space-y-1.5">
+            <div className="flex items-baseline justify-between gap-3">
+              <dt className="text-[11px] text-stone-400">Próximo aviso</dt>
+              <dd className="text-[12px] font-semibold text-stone-600 dark:text-stone-300 text-right">
+                {proximoLocal ? fechaYHora(proximoLocal.cuando) : "—"}
+              </dd>
+            </div>
+            <div className="flex items-baseline justify-between gap-3">
+              <dt className="text-[11px] text-stone-400">En la nube</dt>
+              <dd className="text-[12px] font-semibold text-stone-600 dark:text-stone-300 text-right">
+                {textoNubeCola}
+              </dd>
+            </div>
+            <div className="flex items-baseline justify-between gap-3">
+              <dt className="text-[11px] text-stone-400">Última subida</dt>
+              <dd className="text-[12px] font-semibold text-stone-600 dark:text-stone-300 text-right">
+                {subida
+                  ? `${haceRato(subida.cuando)} · ${subida.cantidad} ${
+                      subida.cantidad === 1 ? "aviso" : "avisos"
+                    }`
+                  : "todavía no se subió"}
+              </dd>
+            </div>
+          </dl>
+          {subida && !subida.ok && (
+            <p className="text-[11px] mt-2 text-rose-600 dark:text-rose-400">
+              El último intento no llegó: {explicarErrorNube(subida.error)}
+            </p>
+          )}
+          {mensajeCola && (
+            <p
+              role="status"
+              className={`text-[11px] mt-2 ${
+                mensajeCola.ok
+                  ? "text-emerald-600 dark:text-emerald-400"
+                  : "text-rose-600 dark:text-rose-400"
+              }`}
+            >
+              {mensajeCola.texto}
+            </p>
+          )}
+          <p className="text-[11px] text-stone-400 mt-3 pt-3 border-t border-stone-50 dark:border-stone-800">
+            Si «Revisar ahora» no sube nada y el próximo aviso ya pasó, revisá la guía de{" "}
+            <strong>supabase/README.md</strong>: sin la nube configurada los avisos locales
+            siguen funcionando, pero no llegan con la app cerrada.
+          </p>
         </div>
         {/* Los tres calendarios en UNA sola burbuja: cerrada se ve el encabezado con los tres logos y la
         flecha, con el resumen de cuáles están conectados; al abrirla baja el contenido —Google, Apple y

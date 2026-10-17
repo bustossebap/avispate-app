@@ -1648,8 +1648,8 @@ check(
   bundle.includes("Cada 5 años") && bundle.includes("Cada 10 años"),
 )
 check(
-  "D · la entrega en curso es la Etapa 10",
-  bundle.includes("Etapa 10") && !bundle.includes("Etapa 7"),
+  "D · la entrega en curso es la Etapa 11",
+  bundle.includes("Etapa 11") && !bundle.includes("Etapa 7"),
 )
 
 process.exit(finish() ? 1 : 0)

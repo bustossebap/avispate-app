@@ -1,4 +1,4 @@
-# AVISPATE — V1.7 (Etapa 10)
+# AVISPATE — V1.8 (Etapa 11)
 
 Primera transformación del prototipo de Figma Make a una V1 funcional ejecutable como aplicación web local.
 
@@ -29,6 +29,9 @@ Primera transformación del prototipo de Figma Make a una V1 funcional ejecutabl
 - Copia de seguridad: todo en un solo `.json` que se descarga y se restaura desde Ajustes › Datos.
 - Avisos con la app cerrada: el teléfono calcula cuándo avisar y lo sube; Supabase guarda la cola y un cron cada minuto manda el push. Con la app cerrada, sin abrirla.
 - Instalable en el teléfono (PWA): íconos propios, se abre sin la barra del navegador y avisa cuando hay una versión nueva.
+- Búsqueda en Inicio: la lupa filtra por nombre, nota o categoría, sin exigir tildes ni mayúsculas y respetando la categoría elegida.
+- Posponer desde la notificación: «Posponer 10 min» o «Posponer 1 hora» mueve el aviso en la nube sin abrir la app.
+- Salud de la cola (Ajustes): cuántos avisos hay en este teléfono, qué tiene la nube y cuándo se subió por última vez, con «Revisar ahora».
 
 ## Ejecutar
 
@@ -367,6 +370,38 @@ orden, ids estables entre aperturas y el `sw.js` publicado) y `tests/e2e-pwa.mjs
 del tamaño que dicen, HTML, service worker y la tarjeta de Ajustes). La batería pasa de 627 a **682**.
 La app sube a **V1.7** y el pie de Ajustes dice `AVISPATE · V1.7 · Etapa 10`.
 
+## Etapa 11: buscar, posponer y saber si la cola está sana
+
+Tres cosas chicas que se notan todos los días:
+
+- **Buscar en Inicio.** La lupa de la cabecera abre un campo que filtra lo que ya se está mirando. Se
+  compara sin tildes ni mayúsculas (`normalize("NFD")` en `src/lib/buscar.ts`), así «jardin» encuentra
+  «Podar el jardín» y «ano» encuentra «Año nuevo». Mira el nombre, las notas y la categoría; las
+  palabras se pueden escribir en cualquier orden («marzo luz») y tienen que aparecer todas. Con texto,
+  la pantalla deja una sola lista de resultados —sin las secciones «Próximamente» / «Más adelante»— y
+  lo vencido que coincide queda arriba; si no hay nada, aparece la abeja con «Nada por acá» y el botón
+  para limpiar. Respeta la categoría elegida y no deja filtros invisibles: al cambiar de pestaña y
+  volver, el campo arranca cerrado.
+- **Posponer desde la notificación.** El push ahora lleva el id del aviso y la notificación ofrece
+  «Posponer 10 min» y «Posponer 1 hora». Al tocarlos, el service worker llama a `posponer_aviso` con el
+  id y el token del dispositivo —que guarda en IndexedDB la primera vez que la app se registra— y el
+  aviso vuelve a quedar pendiente a la hora nueva, sin abrir la app. Lo pospuesto se marca con
+  `pospuesto_en` para que la próxima sincronización no lo borre. Si no hay credenciales o no hay red,
+  abre la app como siempre.
+- **Salud de la cola.** Ajustes muestra, en una tarjeta, cuántos avisos calculó este teléfono, cuál es
+  el próximo, qué tiene la nube (`resumen_cola`: pendientes, enviados, con error) y hace cuánto fue la
+  última subida (se anota también cuando falla). «Revisar ahora» recalcula, sube y vuelve a leer.
+
+Del lado del servidor se suma `supabase/migrations/0002_etapa11.sql` (la columna, las dos funciones y
+la sincronización con la excepción de los pospuestos) y la Edge Function se vuelve a publicar con el
+`aviso` en el payload. La guía sigue en `supabase/README.md`.
+
+Las suites nuevas son `tests/e2e-busca.mjs` (26 comprobaciones: tildes, ñ, mayúsculas, notas,
+categoría, dos palabras en cualquier orden, «sin resultados», limpiar y Escape) y `tests/e2e-salud.mjs`
+(22: la tarjeta de Ajustes, el último intento anotado, el service worker con sus acciones y la
+migración). La batería pasa de 682 a **730**. La app sube a **V1.8** y el pie de Ajustes dice
+`AVISPATE · V1.8 · Etapa 11`.
+
 ## Etapas anteriores y numeración
 
 La app dijo **V1.5** desde la entrega de avisos múltiples, notas de voz y cámara hasta la Etapa 8. Sobre esa versión se fueron sumando entregas de trabajo que no cambiaban el número; la Etapa 9 —la copia de seguridad, la primera función nueva después de la V1.5— lo sube a **V1.6**:
@@ -384,8 +419,9 @@ La app dijo **V1.5** desde la entrega de avisos múltiples, notas de voz y cáma
 | Etapa 8 | Publicación en `avispate-app.vercel.app` (sin protección de despliegues), el arreglo de la batería en vivo con `base: "./"` y el robot de GitHub Actions |
 | Etapa 9 | Copia de seguridad: descargar todo en un `.json` —fotos y notas de voz en base64— y restaurarlo desde Ajustes › Datos, con resumen antes de reemplazar |
 | Etapa 10 | Avisos con la app cerrada (cola calculada en el teléfono + Supabase + cron + Edge Function), AVISPATE instalable con service worker propio y píldora de versión nueva |
+| Etapa 11 | Búsqueda en Inicio (sin tildes, por nombre, nota o categoría), posponer desde la notificación y salud de la cola en Ajustes |
 
-Desde la Etapa 10 la app dice **V1.7** (el pie de Ajustes: `AVISPATE · V1.7 · Etapa 10`). Las próximas
+Desde la Etapa 11 la app dice **V1.8** (el pie de Ajustes: `AVISPATE · V1.8 · Etapa 11`). Las próximas
 entregas vuelven a numerarse como etapas dentro de la misma versión; lo razonable es subir a **V2.0**
 cuando llegue el envío real por WhatsApp y correo.
 

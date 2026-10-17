@@ -10,6 +10,26 @@ import type { AvisoProgramado } from "./cola"
 export type RespuestaNube = { ok: boolean; error?: string }
 export type Dispositivo = { id: string; token: string }
 
+// Lo que devuelve `resumen_cola` (Etapa 11): los números de Ajustes › Salud de la cola. `proximo` es el
+// aviso pendiente más cercano; los dos extremos pueden venir en null si todavía no hay nada.
+export type ResumenCola = {
+  programados: number
+  pendientes: number
+  enviados: number
+  conError: number
+  proximo: string | null
+  ultimoEnviado: string | null
+}
+
+// El último intento de subir la cola, tal como quedó en este teléfono. Se guarda aunque falle: saber que
+// el último intento no llegó es justamente lo que se busca al mirar la salud.
+export type UltimaSubida = {
+  cuando: string
+  ok: boolean
+  cantidad: number
+  error?: string
+}
+
 // Se leen de a una y con nombre fijo a propósito: Vite reemplaza `import.meta.env.VITE_X` en el
 // build y solo esas tres variables llegan al navegador. La privada de VAPID (`VAPID_PRIVATE_KEY`, sin
 // prefijo) se queda en el servidor y nunca entra al bundle.
@@ -18,7 +38,41 @@ const CLAVE_NUBE = (import.meta.env.VITE_SUPABASE_ANON_KEY || "").trim()
 export const CLAVE_PUSH = (import.meta.env.VITE_VAPID_PUBLIC_KEY || "").trim()
 
 const CLAVE_DISPOSITIVO = "avispate.dispositivo.v1"
+const CLAVE_SUBIDA = "avispate.cola.subida.v1"
 const ESPERA_ANTES_DE_SUBIR = 1500
+
+// Los códigos internos no se muestran crudos en pantalla: «sin-red» no le dice nada a nadie.
+export function explicarErrorNube(error?: string) {
+  if (!error) return ""
+  if (error === "sin-nube") return "Falta conectar la nube (ver supabase/README.md)."
+  if (error === "sin-red")
+    return "Sin conexión: este navegador no puede llegar a la nube."
+  return error
+}
+
+// El registro del último intento de subida. Lo escribe `sincronizarCola` y lo lee Ajustes.
+function anotarSubida(cantidad: number, respuesta: RespuestaNube) {
+  const registro: UltimaSubida = {
+    cuando: new Date().toISOString(),
+    ok: respuesta.ok,
+    cantidad,
+    ...(respuesta.ok ? {} : { error: respuesta.error || "sin-detalle" }),
+  }
+  try {
+    localStorage.setItem(CLAVE_SUBIDA, JSON.stringify(registro))
+  } catch {}
+}
+
+export function ultimaSubida(): UltimaSubida | null {
+  try {
+    const crudo = localStorage.getItem(CLAVE_SUBIDA)
+    if (!crudo) return null
+    const dato = JSON.parse(crudo)
+    if (dato && typeof dato.cuando === "string" && typeof dato.cantidad === "number")
+      return dato as UltimaSubida
+  } catch {}
+  return null
+}
 
 export function nubeLista() {
   return !!URL_NUBE && !!CLAVE_NUBE
@@ -88,10 +142,10 @@ function mensajeDeError(estado: number, detalle = "") {
 }
 
 
-async function rpc(
+async function pedir(
   nombre: string,
   cuerpo: Record<string, unknown>,
-): Promise<RespuestaNube> {
+): Promise<{ ok: boolean; error?: string; datos?: unknown }> {
   if (!nubeLista()) return { ok: false, error: "sin-nube" }
   if (!hayRed()) return { ok: false, error: "sin-red" }
   try {
@@ -104,12 +158,25 @@ async function rpc(
       },
       body: JSON.stringify(cuerpo),
     })
-    if (respuesta.ok) return { ok: true }
-    const detalle = await respuesta.text().catch(() => "")
-    return { ok: false, error: mensajeDeError(respuesta.status, detalle) }
+    if (!respuesta.ok) {
+      const detalle = await respuesta.text().catch(() => "")
+      return { ok: false, error: mensajeDeError(respuesta.status, detalle) }
+    }
+    // Las funciones que devuelven void llegan con el cuerpo vacío: no es un error, simplemente no hay
+    // nada que leer. Por eso el JSON se intenta y, si falla, se sigue con `undefined`.
+    const datos = await respuesta.json().catch(() => undefined)
+    return { ok: true, datos }
   } catch {
     return { ok: false, error: "No se pudo llegar a la nube: revisá tu conexión." }
   }
+}
+
+async function rpc(
+  nombre: string,
+  cuerpo: Record<string, unknown>,
+): Promise<RespuestaNube> {
+  const respuesta = await pedir(nombre, cuerpo)
+  return respuesta.ok ? { ok: true } : { ok: false, error: respuesta.error }
 }
 
 // Alta o actualización del dispositivo. `push` va con la suscripción del navegador (endpoint y las dos
@@ -137,8 +204,18 @@ let temporizador: ReturnType<typeof setTimeout> | null = null
 // toca varios estados seguidos) suba una sola vez. La promesa se resuelve con el resultado del envío
 // que de verdad salió, y si llega otro cambio antes se reemplaza por el nuevo.
 export function sincronizarCola(avisos: AvisoProgramado[]): Promise<RespuestaNube> {
-  if (!nubeLista()) return Promise.resolve({ ok: false, error: "sin-nube" })
-  if (!hayRed()) return Promise.resolve({ ok: false, error: "sin-red" })
+  // Los dos casos en que ni se intenta también quedan anotados: la tarjeta de salud tiene que poder
+  // decir «el último intento no llegó» aunque el teléfono esté sin red.
+  if (!nubeLista()) {
+    const respuesta = { ok: false, error: "sin-nube" }
+    anotarSubida(avisos.length, respuesta)
+    return Promise.resolve(respuesta)
+  }
+  if (!hayRed()) {
+    const respuesta = { ok: false, error: "sin-red" }
+    anotarSubida(avisos.length, respuesta)
+    return Promise.resolve(respuesta)
+  }
   if (temporizador) clearTimeout(temporizador)
   const { id, token } = dispositivo()
   return new Promise((resolver) => {
@@ -156,6 +233,7 @@ export function sincronizarCola(avisos: AvisoProgramado[]): Promise<RespuestaNub
           emoji: a.emoji,
         })),
       })
+      anotarSubida(avisos.length, respuesta)
       resolver(respuesta)
     }, ESPERA_ANTES_DE_SUBIR)
   })
@@ -165,4 +243,20 @@ export function sincronizarCola(avisos: AvisoProgramado[]): Promise<RespuestaNub
 export async function pedirAvisoDePrueba(): Promise<RespuestaNube> {
   const { id, token } = dispositivo()
   return rpc("probar_aviso", { p_dispositivo: id, p_token: token })
+}
+
+// La salud de la cola (Etapa 11): qué tiene la nube para este dispositivo. Es una lectura, no cambia
+// nada; la pantalla la pide al entrar y cuando alguien toca «Revisar ahora».
+export async function resumenCola(): Promise<{
+  ok: boolean
+  datos?: ResumenCola
+  error?: string
+}> {
+  const { id, token } = dispositivo()
+  const respuesta = await pedir("resumen_cola", {
+    p_dispositivo: id,
+    p_token: token,
+  })
+  if (!respuesta.ok) return { ok: false, error: explicarErrorNube(respuesta.error) }
+  return { ok: true, datos: (respuesta.datos ?? undefined) as ResumenCola | undefined }
 }
