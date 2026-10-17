@@ -1,0 +1,6 @@
+# Vercel compila desde el código: el dist/ que sube el CLI no hace falta y además Tailwind lo escanea
+# como si fuera fuente (de ahí salían utilidades de más, como .blur, en el CSS publicado). Los registros
+# de la batería y los archivos de entorno tampoco viajan.
+dist/
+tests/.logs/
+.env*
