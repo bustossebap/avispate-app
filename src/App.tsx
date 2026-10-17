@@ -384,12 +384,6 @@ function formatDate(date: string) {
     year: "numeric",
   })
 }
-function formatShortDate(date: string) {
-  return parseDate(date).toLocaleDateString("es-CL", {
-    day: "numeric",
-    month: "short",
-  })
-}
 function formatStamp(iso: string) {
   const d = new Date(iso)
   return Number.isNaN(d.getTime())
@@ -7051,7 +7045,7 @@ function TipsScreen({ onClose }: { onClose: () => void }) {
   const swipeStart = (x: number, y: number, target: EventTarget | null) => {
     start.current = onField(target) ? null : { x, y }
   }
-  const swipeEnd = (x: number, y: number, target: EventTarget | null) => {
+  const swipeEnd = (x: number, target: EventTarget | null) => {
     const gesture = start.current
     start.current = null
     if (!gesture || (target && onField(target))) return
@@ -7087,7 +7081,7 @@ function TipsScreen({ onClose }: { onClose: () => void }) {
         }}
         onTouchEnd={(e) => {
           const t = e.changedTouches[0]
-          if (t) swipeEnd(t.clientX, t.clientY, e.target)
+          if (t) swipeEnd(t.clientX, e.target)
         }}
         onPointerDown={(e) => {
           if (e.pointerType === "touch") return
@@ -7095,7 +7089,7 @@ function TipsScreen({ onClose }: { onClose: () => void }) {
         }}
         onPointerUp={(e) => {
           if (e.pointerType === "touch") return
-          swipeEnd(e.clientX, e.clientY, e.target)
+          swipeEnd(e.clientX, e.target)
         }}
         className="flex-1 flex flex-col items-center justify-center px-8 py-4 cursor-pointer select-none overflow-y-auto"
       >
