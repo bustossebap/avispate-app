@@ -19,7 +19,7 @@ This is the canonical project structure. Start with task-relevant files below. O
 - `index.html` - Vite HTML shell containing the `#root` element and loading `src/main.tsx`
 - `package.json` - Project dependencies and the Vite build, development, preview, test, verification, and formatting scripts
 - `vite.config.ts` - Vite configuration with React, Tailwind CSS v4, and Figma Make plugins plus the `@` alias for `src`
-- `.mise.toml` - Toolchain versions for Node.js and pnpm
+- `.mise.toml` - Toolchain version for Node.js (24); dependencies are installed and run with npm (single `package-lock.json`)
 - `tests/` - The jsdom E2E battery: `harness.mjs` (shared mounting and helpers), `e2e-*.mjs` (one suite per delivery), `run.mjs` (runner). Run it with `npm test`; it needs a fresh `dist/` (`npm run build` first).
 - `scripts/verificar.sh` - The loop: types → build → local battery; with `--deploy` also publishes to Vercel and runs the live battery (`npm run verificar` / `npm run verificar -- --deploy`).
 - `.vscode/settings.json` - Live Server pointed at `dist/` (root `/dist`, port 5500, host `0.0.0.0`). Serve the built app with `npm run build:watch` and open `dist/` with Live Server; the build uses a relative `base` (`./assets/…`) so `dist/` works from any root, Vercel included.

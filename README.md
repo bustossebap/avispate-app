@@ -25,7 +25,7 @@ Primera transformación del prototipo de Figma Make a una V1 funcional ejecutabl
 
 ## Ejecutar
 
-Requisitos: Node.js 20+ recomendado.
+Requisitos: Node.js 24 (lo que fija `.mise.toml`) y npm. Hay un solo lockfile, `package-lock.json`; `npm ci` reinstala exactamente lo que dice.
 
 ```bash
 npm install
@@ -96,9 +96,11 @@ Dos detalles del entorno que conviene saber:
   formatear `src/`, después hay que reparar los tipos (`npx tsc --noEmit` los marca uno por uno y basta con
   reponer el `;` en la columna que indica el error).
 
-Nota sobre los lockfiles: el proyecto trae `package-lock.json` (npm, el que usan `npm install` y Vercel) y
-`pnpm-lock.yaml` (el toolchain de `.mise.toml`). Si vas a instalar con pnpm, corré antes
-`pnpm install --lockfile-only` para que su lockfile incluya `jsdom`, que es la dependencia de la batería.
+Nota sobre el lockfile: hay **uno solo**, `package-lock.json` (el que usan `npm install`, `npm ci` y Vercel).
+El `pnpm-lock.yaml` que venía con el template de Figma Make se borró junto con el pnpm de `.mise.toml`:
+estaba desactualizado —le faltaba `jsdom`, la dependencia de la batería— y tener dos lockfiles era una
+trampa (instalar con pnpm dejaba las pruebas rotas). Si algún día vuelve pnpm, regenerá el lockfile con
+`pnpm install --lockfile-only` **antes** de usarlo.
 
 ## Nota importante sobre WhatsApp
 
