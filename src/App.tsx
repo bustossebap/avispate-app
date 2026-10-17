@@ -26,6 +26,19 @@ import {
 import { buscarRecordatorios, hayConsulta } from "./lib/buscar"
 import { programarAvisos, type AvisoProgramado } from "./lib/cola"
 import {
+  asegurarSesion,
+  cerrarSesion,
+  desvincularDispositivo,
+  enviarEnlace,
+  leerSesion,
+  misDispositivos,
+  procesarEnlaceCuenta,
+  reclamarDispositivo,
+  vinculadoEnEsteTelefono,
+  type DispositivoCuenta,
+  type Sesion,
+} from "./lib/cuenta"
+import {
   DEFAULT_CHANNEL_PREFS,
   channelReady,
   deliveryChannels,
@@ -37,6 +50,7 @@ import {
 import { estadoDe, etiquetaCanal, etiquetaEstado, type EnvioReciente } from "./lib/envio"
 import {
   asegurarNube,
+  dispositivo,
   estadoCanales,
   explicarErrorNube,
   nubeAnotada,
@@ -6388,6 +6402,345 @@ function fechaYHora(iso: string) {
   })
 }
 
+// La cuenta (Etapa 15): enlace mágico, sesión del dispositivo y vínculo con este teléfono. Es una
+// tarjeta aparte porque no pertenece a ningún usuario del dispositivo: la cuenta es de la persona y
+// puede tener varios teléfonos. Todo es opcional; sin sesión, la app sigue siendo la de siempre.
+function CuentaCard({
+  cuenta,
+  aviso,
+  onSesion,
+}: {
+  cuenta: Sesion | null
+  aviso: string
+  onSesion: (sesion: Sesion | null) => void
+}) {
+  const [correo, setCorreo] = useState(cuenta?.usuario.email ?? "")
+  const [enviando, setEnviando] = useState(false)
+  const [mensaje, setMensaje] = useState<{
+    ok: boolean
+    texto: string
+  } | null>(null)
+  const [vinculado, setVinculado] = useState(() =>
+    vinculadoEnEsteTelefono(cuenta),
+  )
+  const [revisando, setRevisando] = useState(false)
+  const [reclamando, setReclamando] = useState(false)
+  const [desvinculando, setDesvinculando] = useState(false)
+  const [saliendo, setSaliendo] = useState(false)
+  const [confirmarBaja, setConfirmarBaja] = useState(false)
+  const [dispositivos, setDispositivos] = useState<DispositivoCuenta[]>([])
+  const [errorDispositivos, setErrorDispositivos] = useState("")
+
+  const cargarDispositivos = async (sesion: Sesion) => {
+    setRevisando(true)
+    const resultado = await misDispositivos(sesion)
+    // Si la sesión se renovó, el nuevo par de tokens queda en el estado de App para las próximas
+    // llamadas. Solo se avisa cuando de verdad cambió: evita renders en loop.
+    if (resultado.sesion && resultado.sesion.accessToken !== sesion.accessToken)
+      onSesion(resultado.sesion)
+    if (!resultado.ok) {
+      setErrorDispositivos(resultado.error || "No se pudo revisar la lista.")
+      if (!resultado.sesion) onSesion(null)
+    } else {
+      const lista = resultado.datos ?? []
+      setDispositivos(lista)
+      setErrorDispositivos("")
+      // La lista de la nube manda: si alguien desvinculó este teléfono desde otro lado, la tarjeta
+      // deja de decir «Vinculado» en la próxima revisión.
+      setVinculado(lista.some((d) => d.dispositivoId === dispositivo().id))
+    }
+    setRevisando(false)
+  }
+
+  useEffect(() => {
+    setCorreo(cuenta?.usuario.email ?? "")
+    setVinculado(vinculadoEnEsteTelefono(cuenta))
+    setConfirmarBaja(false)
+    setErrorDispositivos("")
+    if (!cuenta) {
+      setDispositivos([])
+      return
+    }
+    setMensaje(null)
+    void cargarDispositivos(cuenta)
+    // Solo cambia la identidad de la cuenta; renovar el token no debe volver a pedir la lista.
+  }, [cuenta?.usuario.id])
+
+  const enviar = async () => {
+    if (enviando) return
+    setEnviando(true)
+    setMensaje(null)
+    const resultado = await enviarEnlace(correo)
+    setMensaje(
+      resultado.ok
+        ? {
+            ok: true,
+            texto: `Te mandamos un enlace a ${correo
+              .trim()
+              .toLowerCase()}. Abrilo en este teléfono para entrar.`,
+          }
+        : {
+            ok: false,
+            texto: resultado.error || "No se pudo pedir el enlace.",
+          },
+    )
+    setEnviando(false)
+  }
+
+  const reclamar = async () => {
+    if (!cuenta || reclamando) return
+    setReclamando(true)
+    setMensaje(null)
+    const resultado = await reclamarDispositivo(cuenta)
+    if (resultado.sesion) onSesion(resultado.sesion)
+    if (resultado.ok) {
+      setVinculado(true)
+      setMensaje({
+        ok: true,
+        texto: "Este teléfono quedó vinculado a tu cuenta.",
+      })
+      void cargarDispositivos(resultado.sesion ?? cuenta)
+    } else {
+      setMensaje({
+        ok: false,
+        texto: resultado.error || "No se pudo vincular el teléfono.",
+      })
+    }
+    setReclamando(false)
+  }
+
+  const desvincular = async () => {
+    if (!cuenta || desvinculando) return
+    if (!confirmarBaja) {
+      setConfirmarBaja(true)
+      return
+    }
+    setDesvinculando(true)
+    setConfirmarBaja(false)
+    setMensaje(null)
+    const resultado = await desvincularDispositivo(cuenta)
+    if (resultado.sesion) onSesion(resultado.sesion)
+    if (resultado.ok) {
+      setVinculado(false)
+      setDispositivos((prev) =>
+        prev.filter((d) => d.dispositivoId !== dispositivo().id),
+      )
+      setMensaje({
+        ok: true,
+        texto:
+          "Este teléfono ya no está vinculado. La cuenta sigue abierta.",
+      })
+    } else {
+      setMensaje({
+        ok: false,
+        texto: resultado.error || "No se pudo desvincular el teléfono.",
+      })
+    }
+    setDesvinculando(false)
+  }
+
+  const salir = async () => {
+    if (!cuenta || saliendo) return
+    setSaliendo(true)
+    await cerrarSesion(cuenta)
+    onSesion(null)
+    setVinculado(false)
+    setDispositivos([])
+    setSaliendo(false)
+    setMensaje({
+      ok: true,
+      texto: "Sesión cerrada. Tus datos siguen en este teléfono.",
+    })
+  }
+
+
+  return (
+    <>
+      <p className="text-[11px] font-bold uppercase tracking-widest text-stone-400 mb-2">
+        Cuenta
+      </p>
+      <div className="bg-white dark:bg-stone-900 rounded-3xl p-5 border border-stone-100 dark:border-stone-800 mb-4">
+        {cuenta ? (
+          <>
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="font-semibold text-[14px] text-stone-800 dark:text-stone-100 break-words">
+                  Cuenta de {cuenta.usuario.email}
+                </p>
+                <p className="text-[12px] text-stone-400 mt-1">
+                  Sesión iniciada en este teléfono.
+                </p>
+              </div>
+              <span
+                className={`text-[10px] font-bold px-2 py-0.5 rounded-full flex-shrink-0 ${
+                  vinculado
+                    ? "bg-emerald-100 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300"
+                    : "bg-amber-100 dark:bg-amber-500/25 text-amber-700 dark:text-amber-300"
+                }`}
+              >
+                {vinculado ? "✓ Vinculado" : "Sin vincular"}
+              </span>
+            </div>
+            {!vinculado ? (
+              <>
+                <p className="text-[12px] text-stone-500 dark:text-stone-400 mt-3">
+                  Vinculá este teléfono a tu cuenta para que la cuenta sepa
+                  cuáles son tuyos. El alta comprueba la sesión y el token de
+                  este dispositivo.
+                </p>
+                <button
+                  type="button"
+                  onClick={reclamar}
+                  disabled={reclamando}
+                  className="mt-3 w-full py-3 rounded-2xl bg-amber-600 text-white text-[14px] font-bold disabled:opacity-50"
+                >
+                  {reclamando ? "Vinculando…" : "Vincular este teléfono"}
+                </button>
+              </>
+            ) : (
+              <>
+                <p className="text-[12px] text-emerald-600 dark:text-emerald-400 mt-3">
+                  Este teléfono está vinculado a tu cuenta.
+                </p>
+                <button
+                  type="button"
+                  onClick={desvincular}
+                  disabled={desvinculando}
+                  className={`mt-3 text-[12px] font-semibold underline decoration-stone-300 underline-offset-2 disabled:opacity-50 ${
+                    confirmarBaja
+                      ? "text-red-600 dark:text-red-400"
+                      : "text-stone-500 dark:text-stone-400"
+                  }`}
+                >
+                  {desvinculando
+                    ? "Desvinculando…"
+                    : confirmarBaja
+                      ? "¿Seguro? Tocá de nuevo para desvincular"
+                      : "Desvincular este teléfono"}
+                </button>
+              </>
+            )}
+            <p className="text-[11px] font-bold uppercase tracking-widest text-stone-400 mt-4 pt-3 border-t border-stone-50 dark:border-stone-800">
+              Dispositivos vinculados
+            </p>
+            {revisando ? (
+              <p className="text-[12px] text-stone-400 mt-2">Revisando…</p>
+            ) : dispositivos.length === 0 ? (
+              <p className="text-[12px] text-stone-400 mt-2">
+                Todavía no hay teléfonos vinculados.
+              </p>
+            ) : (
+              dispositivos.map((d) => (
+                <div
+                  key={d.dispositivoId}
+                  className="flex items-center justify-between gap-3 py-2 border-b border-stone-50 dark:border-stone-800 last:border-0"
+                >
+                  <div className="min-w-0">
+                    <p className="text-[12px] font-semibold text-stone-700 dark:text-stone-200 truncate">
+                      {d.nombre}
+                      {d.dispositivoId === dispositivo().id && (
+                        <span className="text-amber-600 dark:text-amber-300 text-[10px] font-bold ml-2">
+                          este teléfono
+                        </span>
+                      )}
+                    </p>
+                    <p className="text-[10px] text-stone-400">
+                      {d.ultimaConexion
+                        ? `Última conexión: ${fechaYHora(d.ultimaConexion)}`
+                        : "Vinculado"}
+                    </p>
+                  </div>
+                </div>
+              ))
+            )}
+            {errorDispositivos && (
+              <p className="text-[11px] text-stone-400 mt-2">
+                {errorDispositivos}
+              </p>
+            )}
+            <button
+              type="button"
+              onClick={salir}
+              disabled={saliendo}
+              className="mt-4 w-full py-3 rounded-2xl bg-stone-100 dark:bg-stone-800 text-stone-600 dark:text-stone-300 text-[14px] font-semibold disabled:opacity-50"
+            >
+              {saliendo ? "Saliendo…" : "Cerrar sesión"}
+            </button>
+            <p className="text-[11px] text-stone-400 mt-3">
+              Al cerrar sesión, tus recordatorios siguen en este teléfono. La
+              sincronización entre dispositivos llega en la próxima fase de la
+              Etapa 15.
+            </p>
+          </>
+        ) : (
+          <>
+            <p className="font-semibold text-[14px] text-stone-800 dark:text-stone-100">
+              Entrá sin contraseña
+            </p>
+            <p className="text-[12px] text-stone-500 dark:text-stone-400 mt-1">
+              Te mandamos un enlace mágico al correo. Es opcional: este
+              teléfono sigue funcionando como invitado.
+            </p>
+            <label
+              htmlFor="cuenta-correo"
+              className="text-[11px] font-bold uppercase tracking-widest text-stone-400 mt-4 mb-2 block"
+            >
+              Correo electrónico
+            </label>
+            <input
+              id="cuenta-correo"
+              type="email"
+              inputMode="email"
+              autoComplete="email"
+              value={correo}
+              onChange={(e) => setCorreo(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") void enviar()
+              }}
+              placeholder="ana@ejemplo.com"
+              aria-label="Correo de la cuenta"
+              className="w-full bg-stone-50 dark:bg-stone-800 rounded-xl px-3 py-2.5 text-[15px] font-semibold border border-stone-100 dark:border-stone-800 outline-none focus:border-amber-400"
+            />
+            <button
+              type="button"
+              onClick={enviar}
+              disabled={enviando}
+              aria-label="Enviar enlace mágico"
+              className="mt-3 w-full py-3 rounded-2xl bg-amber-600 text-white text-[14px] font-bold disabled:opacity-50"
+            >
+              {enviando ? "Enviando…" : "Enviar enlace mágico"}
+            </button>
+            <p className="text-[11px] text-stone-400 mt-3">
+              El enlace vence en una hora y solo sirve una vez. La sesión queda
+              en este teléfono y no viaja dentro de las copias de seguridad.
+            </p>
+          </>
+        )}
+        {aviso && (
+          <p
+            role="status"
+            className="mt-3 text-[12px] text-rose-600 dark:text-rose-400"
+          >
+            {aviso}
+          </p>
+        )}
+        {mensaje && (
+          <p
+            role="status"
+            className={`mt-3 text-[12px] ${
+              mensaje.ok
+                ? "text-emerald-600 dark:text-emerald-400"
+                : "text-rose-600 dark:text-rose-400"
+            }`}
+          >
+            {mensaje.texto}
+          </p>
+        )}
+      </div>
+    </>
+  )
+}
+
 function SettingsScreen({
   events,
   dark,
@@ -6409,6 +6762,9 @@ function SettingsScreen({
   onUndo,
   ultimaCopia,
   puedeDeshacer,
+  cuenta,
+  avisoCuenta,
+  onSesion,
 }: {
   events: Reminder[]
   dark: boolean
@@ -6430,6 +6786,9 @@ function SettingsScreen({
   onUndo: () => Promise<RespuestaCopia>
   ultimaCopia: UltimaCopia | null
   puedeDeshacer: boolean
+  cuenta: Sesion | null
+  avisoCuenta: string
+  onSesion: (sesion: Sesion | null) => void
 }) {
   // Copia de seguridad: el archivo se elige acá mismo y antes de tocar nada se muestra qué trae y las
   // dos maneras de traerlo (combinar o reemplazar). El mensaje del final es del último intento
@@ -7183,6 +7542,11 @@ function SettingsScreen({
             </div>
           </div>
         </div>
+        <CuentaCard
+          cuenta={cuenta}
+          aviso={avisoCuenta}
+          onSesion={onSesion}
+        />
         <p className="text-[11px] font-bold uppercase tracking-widest text-stone-400 mb-2">
           Usuarios de este dispositivo
         </p>
@@ -8500,6 +8864,30 @@ export default function App() {
   useEffect(() => {
     eventsRef.current = events
   }, [events])
+  // Etapa 15: la cuenta es opcional y vive en este dispositivo. Al arrancar se procesa el enlace del
+  // correo (si volvió con tokens en el hash) y se renueva la sesión si está por vencer. Nada bloquea
+  // la app: si falla, se sigue como invitado y Ajustes cuenta el motivo.
+  const [cuenta, setCuenta] = useState<Sesion | null>(() => leerSesion())
+  const [avisoCuenta, setAvisoCuenta] = useState("")
+  useEffect(() => {
+    let vivo = true
+    const arrancar = async () => {
+      const enlace = await procesarEnlaceCuenta()
+      if (!vivo) return
+      if (enlace.error) setAvisoCuenta(enlace.error)
+      if (enlace.sesion) {
+        setCuenta(enlace.sesion)
+        return
+      }
+      const vigente = await asegurarSesion()
+      if (vivo) setCuenta(vigente)
+    }
+    void arrancar()
+    return () => {
+      vivo = false
+    }
+  }, [])
+
   // Relevo al cerrar el onboarding: mientras la abeja se despide y el velo se desvanece, el
   // inicio de la app se revela saliendo del desenfoque (ver BeeHandoff). El temporizador lo apaga.
   const [handoff, setHandoff] = useState(false)
@@ -9571,6 +9959,12 @@ export default function App() {
               onUndo={deshacerRestauracion}
               ultimaCopia={ultimaCopia}
               puedeDeshacer={!!deshacer}
+              cuenta={cuenta}
+              avisoCuenta={avisoCuenta}
+              onSesion={(sesion) => {
+                setCuenta(sesion)
+                if (sesion) setAvisoCuenta("")
+              }}
             />
           )}
           {screen === "tips" && (

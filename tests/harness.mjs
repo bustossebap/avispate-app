@@ -103,7 +103,9 @@ export function montar(bundle, seed = {}, opciones = {}) {
     {
       runScripts: "outside-only",
       pretendToBeVisual: true,
-      url: "https://avispate-app.vercel.app/",
+      // La cuenta (Etapa 15) vuelve del correo con los tokens en el hash: una suite puede montar la
+      // app con esa dirección para probar el enlace mágico sin abrir un navegador.
+      url: opciones.url || "https://avispate-app.vercel.app/",
     },
   )
   const { window } = dom

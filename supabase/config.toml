@@ -1,0 +1,30 @@
+project_id = "vmctsurhswayrrwrkggj"
+
+[auth]
+# El enlace mágico vuelve a la app con los tokens en el hash. Sin estas direcciones en la lista,
+# Supabase manda al Site URL y la sesión no se puede cerrar (ver supabase/README.md).
+additional_redirect_urls = [
+  "https://avispate-app.vercel.app/**",
+  "https://recuerdapapi.vercel.app/**",
+  "http://localhost:8443/**",
+  "http://127.0.0.1:8443/**",
+  "http://localhost:5173/**",
+  "http://127.0.0.1:5173/**",
+]
+site_url = "https://avispate-app.vercel.app"
+
+[auth.email]
+enable_confirmations = true
+max_frequency = "1m0s"
+otp_length = 8
+
+[auth.mfa.totp]
+enroll_enabled = true
+verify_enabled = true
+
+[db.pooler]
+default_pool_size = 15
+max_client_conn = 200
+
+[storage.vector]
+enabled = false

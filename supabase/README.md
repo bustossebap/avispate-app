@@ -1,4 +1,4 @@
-# Nube de AVISPATE · Etapas 10 a 14 (avisos con la app cerrada y entrega real)
+# Nube de AVISPATE · Etapas 10 a 15 (avisos con la app cerrada, entrega real y cuenta)
 
 Supabase guarda la suscripción de cada teléfono y la cola de avisos que el teléfono calculó. Cada
 minuto, un cron llama a una función que entrega lo que ya venció por el canal de cada fila: **push**
@@ -58,6 +58,19 @@ Supabase · dispositivos + avisos  ◀── cron cada minuto ──▶ Edge Fun
       and proname in ('probar_canal', 'ultimos_envios', 'sincronizar_avisos', 'resumen_cola');
    select pg_get_constraintdef(oid) from pg_constraint
     where conrelid = 'public.avisos'::regclass and contype = 'p';
+   ```
+
+   **Etapa 15.** Después de la 0003, corré `supabase/migrations/0004_etapa15.sql`. Crea
+   `perfiles_cuenta` y `dispositivos_cuenta` con RLS de solo lectura por usuario, el disparador que
+   crea el perfil al nacer una cuenta y las funciones `reclamar_dispositivo`,
+   `desvincular_dispositivo` y `mis_dispositivos`, ejecutables **solo** por `authenticated`. No toca
+   los recordatorios: la sincronización por entidad es la fase siguiente. Al final, esto debe devolver
+   las tres funciones:
+
+   ```sql
+   select proname from pg_proc
+    where pronamespace = 'public'::regnamespace
+      and proname in ('reclamar_dispositivo', 'desvincular_dispositivo', 'mis_dispositivos');
    ```
 
 2. **Secretos de las funciones.** El proyecto ya tiene las claves VAPID en `.env.local` (que no se
@@ -128,6 +141,82 @@ Supabase · dispositivos + avisos  ◀── cron cada minuto ──▶ Edge Fun
    En Ajustes → *Avisos con la app cerrada* → *Activar avisos* → *Probar aviso*. La prueba llega en
    menos de un minuto, con la app cerrada. Para WhatsApp y correo, la tarjeta **«Entrega real»** dice
    si falta el dato, el ticket o la configuración de la nube, y tiene su propio «Probar» por canal.
+
+## Cuenta con enlace mágico (Etapa 15)
+
+La cuenta es opcional: el onboarding no la pide y el modo invitado sigue funcionando. Quien la crea
+entra desde **Ajustes → Cuenta** con un enlace mágico; no hay contraseñas ni un backend propio.
+
+### Configurar Auth (una sola vez)
+
+1. **URL Configuration** en Supabase → *Authentication → URL Configuration*. Ya quedó configurado y
+   aplicado al proyecto desde `supabase/config.toml`:
+   - *Site URL*: `https://avispate-app.vercel.app`
+   - *Redirect URLs*: el alias nuevo, el anterior (`recuerdapapi.vercel.app`), y `localhost`/`127.0.0.1`
+     en los puertos 8443 y 5173 para desarrollo.
+
+   El enlace del correo vuelve con los tokens en el hash; si la dirección no está en la lista,
+   Supabase manda al *Site URL* y la app no puede cerrar el círculo. No hace falta permitir todos los
+   previews de Vercel: cada despliegue de producción usa el alias. Si cambia el dominio, editá
+   `supabase/config.toml` y corré `supabase config diff` y `supabase config push`; el archivo no
+   contiene secretos.
+2. **Email provider** (*Authentication → Providers → Email*): alcanza con el proveedor por defecto.
+   Supabase manda el enlace con su plantilla; el remitente y el límite de envíos se cambian en
+   *Authentication → Rate Limits* si hace falta. Para producción conviene configurar un SMTP propio
+   (Resend, por ejemplo), porque el correo compartido de Supabase tiene un tope bajo.
+3. **Usuarios**: no hay que crearlos a mano. `enviarEnlace` manda `create_user: true` y el primer
+   enlace crea la cuenta; el disparador de la 0004 crea su fila en `perfiles_cuenta`.
+
+### Cómo funciona
+
+- `src/lib/cuenta.ts` pide el enlace a `POST /auth/v1/otp` con `redirect_to` y, cuando el correo
+  vuelve, pide `GET /auth/v1/user` con el token del hash, guarda la sesión en `avispate.cuenta.v1` y
+  limpia el hash. La sesión se renueva con el refresh token un minuto antes de vencer.
+- «Vincular este teléfono» llama a `reclamar_dispositivo` con el id y el **token** del dispositivo.
+  La función exige `auth.uid()` y comprueba el token; el `user_id` nunca viaja como parámetro.
+- La tarjeta muestra la cuenta, el estado del vínculo y los teléfonos vinculados. «Cerrar sesión»
+  borra la sesión de este teléfono, pero deja los recordatorios locales (modo invitado).
+- La sesión **no** entra en las copias de seguridad: `CLAVES_COPIA` no la incluye.
+
+### Probar
+
+1. En Ajustes → Cuenta, escribí un correo y tocá **Enviar enlace mágico**.
+2. Abrí el correo en el mismo teléfono y tocá el enlace. La app vuelve, muestra «Cuenta de …» y deja
+   el hash limpio.
+3. Tocá **Vincular este teléfono**. En la base, `dispositivos_cuenta` debe tener una fila con el
+   `user_id` de la cuenta y el `dispositivo_id` del teléfono.
+4. Cerrá sesión y volvé a entrar: la sesión se guarda entre arranques; los datos locales no se tocan.
+
+### RLS: la prueba negativa
+
+La 0004 deja las dos tablas con `enable row level security` y una sola política `select` para
+`authenticated` (`auth.uid() = user_id`). `anon` no tiene `select`, `insert`, `update` ni `delete`, y
+las funciones están revocadas de `public`/`anon` y concedidas solo a `authenticated`.
+
+La prueba que se corrió contra el proyecto (en una transacción que se revierte) crea dos cuentas y
+dos dispositivos, se pone en el rol `authenticated` con el `sub` de la primera y comprueba que:
+
+- ve su perfil y su dispositivo, y **no** ve los de la segunda;
+- `reclamar_dispositivo` vincula su teléfono con su token y rechaza un token ajeno (`42501`);
+- un `insert` directo en `perfiles_cuenta` o `dispositivos_cuenta` como `authenticated` falla por
+  permisos.
+
+Para repetirla, usá el mismo enfoque con `npx supabase db query --linked --file <archivo.sql>` y
+cerrá siempre con `rollback`. Si querés una comprobación rápida de las políticas:
+
+```sql
+select tablename, policyname, cmd, roles
+  from pg_policies
+ where schemaname = 'public' and tablename like '%cuenta%';
+```
+
+### Lo que todavía no hace
+
+La cuenta existe y el teléfono queda vinculado, pero los recordatorios, las categorías, los ajustes y
+los adjuntos siguen viviendo **solo** en el teléfono. El esquema por entidad, la cola de salida, el
+cursor de bajada y las tumbas son las fases 2 y 3 de
+[`docs/etapa15-cuenta-y-sincronizacion.md`](../docs/etapa15-cuenta-y-sincronizacion.md). Hasta que
+estén, Ajustes lo dice: la sincronización entre dispositivos llega en la próxima fase.
 
 ## WhatsApp y correo (Etapa 14)
 
@@ -205,8 +294,14 @@ envíos» al tocar «Revisar ahora» en la tarjeta de salud o al volver a Ajuste
   lee lo vencido y manda. El webhook también usa `service_role`, pero solo actualiza filas cuyo
   `proveedor_id` coincide con el id que devolvió el proveedor; no puede crear envíos nuevos.
 - `destino` (número o correo) es un dato personal y vive en la base igual que el contacto del usuario:
-  no se muestra en ninguna tabla pública, y la vista `envios` está revocada para `anon`. Si más
-  adelante hay cuentas (Etapa 15), esa columna entra en la política de RLS por usuario.
+  no se muestra en ninguna tabla pública, y la vista `envios` está revocada para `anon`. Sigue colgada
+  del dispositivo; cuando el motor de sincronización (fase 3 de la Etapa 15) lleve las filas a un
+  `user_id`, esa columna entra en la política por usuario.
+- La cuenta (Etapa 15) suma sus propias reglas: `perfiles_cuenta` y `dispositivos_cuenta` tienen RLS
+  y una política de `select` por usuario; `anon` no puede leerlas ni escribir directamente. Las
+  funciones `reclamar_dispositivo`, `desvincular_dispositivo` y `mis_dispositivos` están revocadas
+  de `public`/`anon` y solo las puede ejecutar `authenticated`. El alta, además de la sesión, exige el
+  token del dispositivo.
 - Los secretos de WhatsApp y correo (`WHATSAPP_TOKEN`, `RESEND_API_KEY`, etc.) solo existen como
   variables de entorno de la función: el GET de estado devuelve booleanos y el nombre de la plantilla,
   nunca sus valores. La `VAPID_PRIVATE_KEY` tampoco entra al bundle porque no lleva el prefijo `VITE_`.
@@ -252,3 +347,8 @@ central y no un lujo.
 | «Entregado» nunca aparece | El webhook no está configurado o la firma falla. Mirá los logs de `webhooks-envio`; el estado queda en `enviado`. |
 | `401` en el webhook | La firma no coincide (secreto equivocado) o falta `?secreto=WEBHOOK_TOKEN`. Meta y Resend firman distinto: cada uno tiene su secreto. |
 | Ajustes muestra «Falló» con el motivo | Ese es el `ultimo_error` real del proveedor. Después de corregir la causa, la próxima sincronización repone las filas futuras; una prueba manual confirma el arreglo. |
+| El enlace de la cuenta no llega | Revisá *Authentication → Rate Limits* y la carpeta de spam. El correo compartido de Supabase tiene un tope bajo; para producción conviene un SMTP propio. |
+| El enlace vuelve a otra dirección | La URL de la app no está en *Authentication → URL Configuration → Redirect URLs*. Agregá el alias y, para desarrollo, `localhost`. |
+| «La sesión venció» al vincular | El access token expiró y el refresh falló (o se usó en otro dispositivo). Pedí un enlace nuevo desde Ajustes → Cuenta. |
+| `403` al reclamar el teléfono | El token del dispositivo no coincide con el de la nube. Recargá la app; si sigue, *Apagar* y *Activar avisos* vuelve a registrar el dispositivo. |
+| `42501` en las pruebas de RLS | Es lo esperado: `anon` y `authenticated` no tienen escritura directa. Las altas van por `reclamar_dispositivo`. |
