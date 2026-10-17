@@ -25,7 +25,7 @@ This is the canonical project structure. Start with task-relevant files below. O
 - `scripts/avisar.sh` - Desktop notification (macOS `osascript`, no dependencies) so the user hears when a task ends: `bash scripts/avisar.sh "resumen corto"`. See *Fin de tarea* below.
 - `.github/workflows/verificar.yml` - GitHub Actions: on every push to `main` and every pull request it runs `npm ci`, `format:check` and `npm run verificar` (no deploy; Vercel handles publishing).
 - `.vercelignore` - Keeps `dist/`, `tests/.logs/` and `.env*` out of the Vercel upload: Vercel builds from source, so its CSS/JS hashes match the local build (uploading `dist/` made Tailwind scan it and add stray utilities).
-- `src/lib/copia.ts` - Backup file format (`.json` with `localStorage` keys plus base64 attachments) and its validation; kept out of `App.tsx` so the format can be read and tested on its own.
+- `src/lib/copia.ts` - Backup file format (`.json` with `localStorage` keys plus base64 attachments) and its validation, plus the Etapa 12 merge (`combinarDatos`: add only what is missing, never overwrite) and the «hace cuánto» wording (`haceCuanto`); kept out of `App.tsx` so the format can be read and tested on its own.
 - `src/lib/repeticion.ts` - Repetition calendar (`nextOccurrenceAt`: «cada 8 horas», «cada mes»…) and the local-date helpers (`parseDate`, `pad2`, month/year-safe math). The only place that decides when a reminder repeats.
 - `src/lib/avisos.ts` - Alert offsets («30 días antes», «1 hora antes»): labels, conversion to days and duplicate removal.
 - `src/lib/buscar.ts` - Home search (Etapa 11): NFD accent folding, query split into words (all must match), `buscarRecordatorios` over name, notes and category. Pure logic; no React.
@@ -43,7 +43,7 @@ This is the canonical project structure. Start with task-relevant files below. O
 Two rules apply when a task ends (the last reply to the user):
 
 - Run `bash scripts/avisar.sh "<short summary>"` so the user gets a desktop notification (for example
-  `"Etapa 11 lista · 730/730"`). It is a courtesy ping: it must never fail or delay the task.
+  `"Etapa 12 lista · 760/760"`). It is a courtesy ping: it must never fail or delay the task.
 - **Do not deploy to Vercel** (`npm run verificar -- --deploy`, `npx vercel --prod`) unless the user asks
   for it. `npm run verificar` is the default gate and never publishes; publishing is a separate decision.
 

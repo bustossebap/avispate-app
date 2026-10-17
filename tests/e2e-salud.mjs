@@ -221,7 +221,7 @@ check(
 )
 check(
   "E · el pie de Ajustes ya es el de esta entrega",
-  texto.includes("AVISPATE · V1.8 · Etapa 11"),
+  texto.includes("AVISPATE · V1.9 · Etapa 12"),
   texto.slice(-60),
 )
 

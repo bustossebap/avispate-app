@@ -2,12 +2,17 @@ import { useEffect, useRef, useState } from "react"
 import { createPortal } from "react-dom"
 import {
   armarCopia,
+  combinarDatos,
   contarEnCopia,
+  diasDesde,
+  haceCuanto,
   leerCopia,
   nombreDeCopia,
   serializarCopia,
   type AdjuntoEnCopia,
   type Copia,
+  type ListaCombinable,
+  type ModoRestaurar,
   type RespuestaCopia,
 } from "./lib/copia"
 import {
@@ -159,9 +164,10 @@ const STORAGE_CATEGORIES = "avispate.categorias.v1"
 // avispate-app.vercel.app y la batería en vivo arreglada (los assets con `./`) · 9: la copia de
 // seguridad, que saca y devuelve todo en un .json · 10: los avisos con la app cerrada (push + nube de
 // Supabase) y AVISPATE instalable en el teléfono · 11: la búsqueda en Inicio, posponer desde la
-// notificación y la salud de la cola en Ajustes).
-const APP_VERSION = "V1.8"
-const APP_STAGE = "Etapa 11"
+// notificación y la salud de la cola en Ajustes · 12: la copia que se combina, se deshace y se
+// comparte desde el teléfono, y que avisa cuando hace mucho que no se descarga).
+const APP_VERSION = "V1.9"
+const APP_STAGE = "Etapa 12"
 // Uso de la app: se guarda la última visita para poder avisar —una sola vez por hueco— cuando alguien
 // vuelve después de una semana o más sin abrir AVISPATE. Es el único aviso que no depende de un
 // recordatorio, así que vive aparte con su propia clave.
@@ -187,6 +193,32 @@ const CLAVES_COPIA = [
   STORAGE_ACTIVE_PROFILE,
   STORAGE_CLOCK,
   STORAGE_DARK,
+]
+
+// Etapa 12: la copia que no se olvida. En `avispate.copia.ultima.v1` se anota la última que salió de
+// este teléfono —descargada o compartida— para poder decir «hace cuánto» sin adivinar; en
+// `avispate.copia.deshacer.v1` queda el estado previo a la última restauración, para ofrecer «Volver a
+// como estaba». Las dos son del dispositivo y del momento, así que no viajan dentro de la copia.
+const STORAGE_ULTIMA_COPIA = "avispate.copia.ultima.v1"
+const STORAGE_DESHACER = "avispate.copia.deshacer.v1"
+// A partir de acá la copia se considera vieja y Ajustes lo dice sin dramatizar: un mes es el plazo en
+// el que alguien ya debería tener sus recordatorios a resguardo.
+const DIAS_COPIA_VIEJA = 30
+type UltimaCopia = { cuando: string; bytes: number; recordatorios: number }
+// El estado previo incluye las marcas `avispate.sent.*` porque un reemplazo las borra: si se deshace,
+// tienen que volver tal cual, o los recordatorios recuperados avisarían otra vez lo ya avisado.
+type DeshacerCopia = {
+  cuando: string
+  datos: Record<string, string>
+  enviados: Record<string, string>
+}
+// Las listas que se combinan, cada una con la marca que decide si un elemento ya existe. Las categorías
+// van por nombre porque el nombre ES la clave: dos «Hogar» con emoji distinto son la misma categoría.
+const LISTAS_COPIA: ListaCombinable[] = [
+  { clave: STORAGE_EVENTS, identidad: "id" },
+  { clave: STORAGE_PROFILES, identidad: "id" },
+  { clave: STORAGE_CATEGORIES, identidad: "name" },
+  { clave: STORAGE_NOTIFICATIONS, identidad: "id" },
 ]
 
 // Claves de la V1.5, cuando el contacto y Google Calendar eran un único dato global. Ahora viven
@@ -1287,6 +1319,24 @@ function downloadTextFile(content: string, fileName: string, type: string) {
 function downloadIcsText(content: string, fileName: string) {
   downloadTextFile(content, fileName, "text/calendar;charset=utf-8")
 }
+// Compartir archivos no existe en todos los navegadores: se ofrece la copia por el menú del sistema
+// solo cuando está (Chrome de Android, Safari de iOS y algunos de escritorio), y si no queda la
+// descarga de siempre. Se mira la función, no la plataforma: un navegador de escritorio que sepa
+// compartir archivos también sirve.
+function puedeCompartirCopia() {
+  if (typeof navigator === "undefined") return false
+  if (typeof navigator.share !== "function") return false
+  if (typeof navigator.canShare !== "function") return false
+  // No alcanza con que exista el menú: hay navegadores que comparten texto y enlaces pero no archivos.
+  // La pregunta concreta es si acepta este archivo, que es lo que se le va a pasar.
+  try {
+    return navigator.canShare({
+      files: [new File([""], "avispate.json", { type: "application/json" })],
+    })
+  } catch {
+    return false
+  }
+}
 function downloadIcs(event: Reminder) {
   downloadIcsText(buildIcs(event), icsFileName(event.name, "recordatorio"))
 }
@@ -1776,6 +1826,51 @@ function loadClock12(): boolean {
     typeof Intl !== "undefined" &&
     !!Intl.DateTimeFormat().resolvedOptions().hour12
   )
+}
+// Etapa 12: lo último que salió de este teléfono y el estado previo a la última restauración. Si el
+// texto guardado no se entiende (o la cuota lo dejó a medias), se ignora: la pantalla simplemente no
+// muestra el dato, que es mejor que romper Ajustes al abrirlo.
+function loadUltimaCopia(): UltimaCopia | null {
+  try {
+    const crudo = JSON.parse(localStorage.getItem(STORAGE_ULTIMA_COPIA) ?? "null")
+    if (!crudo || typeof crudo.cuando !== "string") return null
+    return {
+      cuando: crudo.cuando,
+      bytes: Number(crudo.bytes) || 0,
+      recordatorios: Number(crudo.recordatorios) || 0,
+    }
+  } catch {
+    return null
+  }
+}
+function loadDeshacer(): DeshacerCopia | null {
+  try {
+    const crudo = JSON.parse(localStorage.getItem(STORAGE_DESHACER) ?? "null")
+    if (!crudo || typeof crudo.cuando !== "string" || !crudo.datos) return null
+    const soloTexto = (valor: unknown) => {
+      const salida: Record<string, string> = {}
+      if (valor && typeof valor === "object")
+        for (const [clave, guardado] of Object.entries(valor))
+          if (typeof guardado === "string") salida[clave] = guardado
+      return salida
+    }
+    return {
+      cuando: crudo.cuando,
+      datos: soloTexto(crudo.datos),
+      enviados: soloTexto(crudo.enviados),
+    }
+  } catch {
+    return null
+  }
+}
+// Las marcas de «ya avisado» que hay ahora: se borran al reemplazar y se guardan para poder deshacer.
+function clavesEnviadas(): string[] {
+  const salida: string[] = []
+  for (let i = 0; i < localStorage.length; i++) {
+    const clave = localStorage.key(i)
+    if (clave?.startsWith(SENT_PREFIX)) salida.push(clave)
+  }
+  return salida
 }
 function saveClock12(clock12: boolean) {
   try {
@@ -6228,7 +6323,11 @@ function SettingsScreen({
   clock12,
   onClock12,
   onBackup,
+  onShare,
   onRestore,
+  onUndo,
+  ultimaCopia,
+  puedeDeshacer,
 }: {
   events: Reminder[]
   dark: boolean
@@ -6245,10 +6344,15 @@ function SettingsScreen({
   clock12: boolean
   onClock12: (v: boolean) => void
   onBackup: () => Promise<RespuestaCopia>
-  onRestore: (copia: Copia) => Promise<RespuestaCopia>
+  onShare: () => Promise<RespuestaCopia>
+  onRestore: (copia: Copia, modo: ModoRestaurar) => Promise<RespuestaCopia>
+  onUndo: () => Promise<RespuestaCopia>
+  ultimaCopia: UltimaCopia | null
+  puedeDeshacer: boolean
 }) {
-  // Copia de seguridad: el archivo se elige acá mismo y antes de reemplazar nada se muestra qué trae.
-  // El mensaje del final es del último intento (descarga, restauración o error) y se queda a la vista.
+  // Copia de seguridad: el archivo se elige acá mismo y antes de tocar nada se muestra qué trae y las
+  // dos maneras de traerlo (combinar o reemplazar). El mensaje del final es del último intento
+  // (descarga, compartición, restauración, deshacer o error) y se queda a la vista.
   const [mensaje, setMensaje] = useState<RespuestaCopia | null>(null)
   const [pendiente, setPendiente] = useState<{
     nombre: string
@@ -6263,6 +6367,22 @@ function SettingsScreen({
     setMensaje(await onBackup())
     setOcupado(false)
   }
+  const compartir = async () => {
+    setOcupado(true)
+    setPendiente(null)
+    setMensaje(await onShare())
+    setOcupado(false)
+  }
+  const deshacer = async () => {
+    setOcupado(true)
+    setMensaje(await onUndo())
+    setOcupado(false)
+  }
+  // Cuándo salió la última copia y si ya toca otra. La fecha se cuenta en días completos: «hoy» es hoy,
+  // aunque hayan pasado diez minutos.
+  const comparte = puedeCompartirCopia()
+  const diasCopia = ultimaCopia ? diasDesde(ultimaCopia.cuando) : null
+  const copiaVieja = diasCopia !== null && diasCopia >= DIAS_COPIA_VIEJA
   const leerArchivo = async (file: File | undefined) => {
     if (!file) return
     setMensaje(null)
@@ -6302,10 +6422,10 @@ function SettingsScreen({
       )}`,
     })
   }
-  const confirmarRestaurar = async () => {
+  const confirmarRestaurar = async (modo: ModoRestaurar) => {
     if (!pendiente) return
     setOcupado(true)
-    setMensaje(await onRestore(pendiente.copia))
+    setMensaje(await onRestore(pendiente.copia, modo))
     setPendiente(null)
     setOcupado(false)
   }
@@ -7486,8 +7606,9 @@ function SettingsScreen({
           <p className="text-[12px] text-stone-400 mt-1">
             Se almacenan localmente en este navegador.
           </p>
-          {/* Etapa 9: la copia de seguridad. Descargar deja un .json con todo; restaurar lo devuelve
-              después de mostrar qué trae, porque reemplaza lo que hay guardado ahora. */}
+          {/* Etapa 9 y 12: la copia de seguridad. Descargar (o compartir) deja un .json con todo;
+              restaurar lo devuelve después de mostrar qué trae y de elegir si se suma a lo que hay o
+              si lo reemplaza. Y siempre se puede volver a como estaba antes de la última restauración. */}
           <div className="mt-4 pt-4 border-t border-stone-100 dark:border-stone-800">
             <p className="text-[13px] font-semibold text-stone-700 dark:text-stone-200">
               Copia de seguridad
@@ -7506,6 +7627,16 @@ function SettingsScreen({
               >
                 {ocupado ? "Un momento…" : "Descargar copia"}
               </button>
+              {comparte && (
+                <button
+                  type="button"
+                  onClick={compartir}
+                  disabled={ocupado}
+                  className="px-4 py-2.5 rounded-xl bg-stone-100 dark:bg-stone-800 text-stone-700 dark:text-stone-200 text-[13px] font-bold disabled:opacity-50"
+                >
+                  Compartir copia
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => archivoCopia.current?.click()}
@@ -7515,6 +7646,20 @@ function SettingsScreen({
                 Restaurar desde archivo
               </button>
             </div>
+            <p className="mt-2 text-[11px] text-stone-400">
+              {ultimaCopia
+                ? `Último respaldo: ${haceCuanto(ultimaCopia.cuando)} · ${cuantos(
+                    ultimaCopia.recordatorios,
+                    "recordatorio",
+                    "recordatorios",
+                  )} (${formatFileSize(ultimaCopia.bytes)}).`
+                : "Todavía no descargaste ninguna copia."}
+            </p>
+            {copiaVieja && (
+              <p className="mt-1 text-[11px] font-medium text-amber-700 dark:text-amber-300">
+                Conviene descargar una copia nueva: si se limpia este navegador, no hay otra.
+              </p>
+            )}
             <input
               ref={archivoCopia}
               type="file"
@@ -7532,17 +7677,28 @@ function SettingsScreen({
             {pendiente && (
               <div className="mt-3 rounded-2xl bg-amber-50 dark:bg-amber-500/10 p-3">
                 <p className="text-[12px] text-stone-600 dark:text-stone-300">
-                  «{pendiente.nombre}» trae {pendiente.cuenta}. Se reemplaza lo
-                  que hay guardado ahora.
+                  «{pendiente.nombre}» trae {pendiente.cuenta}.
                 </p>
-                <div className="mt-2 flex gap-2">
+                <p className="mt-2 text-[11px] text-stone-500 dark:text-stone-400">
+                  Sumar no borra nada: agrega lo que no está y deja igual lo
+                  que ya tenés. Reemplazar deja solo lo que trae el archivo.
+                </p>
+                <div className="mt-2 flex flex-wrap gap-2">
                   <button
                     type="button"
-                    onClick={confirmarRestaurar}
+                    onClick={() => confirmarRestaurar("combinar")}
                     disabled={ocupado}
                     className="px-3 py-2 rounded-xl bg-amber-600 text-white text-[12px] font-bold disabled:opacity-50"
                   >
-                    Sí, restaurar
+                    Sumar lo que falta
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => confirmarRestaurar("reemplazar")}
+                    disabled={ocupado}
+                    className="px-3 py-2 rounded-xl bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-700 text-stone-600 dark:text-stone-300 text-[12px] font-bold disabled:opacity-50"
+                  >
+                    Sí, reemplazar todo
                   </button>
                   <button
                     type="button"
@@ -7565,6 +7721,16 @@ function SettingsScreen({
               >
                 {mensaje.text}
               </p>
+            )}
+            {puedeDeshacer && (
+              <button
+                type="button"
+                onClick={deshacer}
+                disabled={ocupado}
+                className="mt-2 text-[12px] font-semibold text-stone-500 dark:text-stone-400 underline decoration-stone-300 underline-offset-2 disabled:opacity-50"
+              >
+                Volver a como estaba
+              </button>
             )}
           </div>
           <button
@@ -7872,6 +8038,11 @@ export default function App() {
   // dispositivo, como el modo oscuro. Se aplica al campo de hora del recordatorio, a las tarjetas y
   // al detalle; los datos guardados siguen siendo "HH:MM" de 24 h (Google Calendar y .ics incluidos).
   const [clock12, setClock12] = useState<boolean>(loadClock12)
+  // Etapa 12: lo que se muestra y se puede deshacer en la tarjeta de Copia de seguridad. El estado para
+  // deshacer vive en localStorage (es el que se escribe al restaurar); acá se guarda lo justo para
+  // pintar el botón, con los datos completos incluidos para no volver a leerlos.
+  const [ultimaCopia, setUltimaCopia] = useState<UltimaCopia | null>(loadUltimaCopia)
+  const [deshacer, setDeshacer] = useState<DeshacerCopia | null>(loadDeshacer)
   // Relevo al cerrar el onboarding: mientras la abeja se despide y el velo se desvanece, el
   // inicio de la app se revela saliendo del desenfoque (ver BeeHandoff). El temporizador lo apaga.
   const [handoff, setHandoff] = useState(false)
@@ -8186,43 +8357,64 @@ export default function App() {
     setTab("home")
   }
 
-  // Copia de seguridad (Etapa 9): se arma con lo que hay guardado en este momento y se descarga como un
-  // .json. Los adjuntos se leen de IndexedDB uno por uno; si alguno ya no está (o el navegador no deja
-  // abrir la base), la copia sale igual, sin ese archivo y sin romper nada.
+  // Copia de seguridad (Etapa 9, ampliada en la 12): se arma con lo que hay guardado en este momento.
+  // Los adjuntos se leen de IndexedDB uno por uno; si alguno ya no está (o el navegador no deja abrir
+  // la base), la copia sale igual, sin ese archivo y sin romper nada. El mismo archivo sirve para
+  // descargarlo o para compartirlo por el menú del teléfono (Drive, WhatsApp, correo).
+  const armarArchivoCopia = async () => {
+    const datos: Record<string, string> = {}
+    for (const clave of CLAVES_COPIA) {
+      const guardado = localStorage.getItem(clave)
+      if (guardado !== null) datos[clave] = guardado
+    }
+    const adjuntos: Record<string, AdjuntoEnCopia> = {}
+    for (const evento of events) {
+      for (const meta of evento.attachments ?? []) {
+        if (adjuntos[meta.id]) continue
+        try {
+          const blob = await getAttachment(meta.id)
+          if (!blob) continue
+          adjuntos[meta.id] = {
+            type: blob.type || meta.type,
+            data: await blobABase64(blob),
+          }
+        } catch {}
+      }
+    }
+    const texto = serializarCopia(armarCopia(datos, adjuntos))
+    return {
+      texto,
+      adjuntos: Object.keys(adjuntos).length,
+      bytes: new Blob([texto]).size,
+    }
+  }
+  // Anota la copia que acaba de salir: es lo que permite decir «Último respaldo: hace X» y avisar a los
+  // 30 días. Se escribe antes de responder para que la pantalla lo muestre en el acto.
+  const anotarCopia = (bytes: number, recordatorios: number) => {
+    const dato: UltimaCopia = {
+      cuando: new Date().toISOString(),
+      bytes,
+      recordatorios,
+    }
+    try {
+      localStorage.setItem(STORAGE_ULTIMA_COPIA, JSON.stringify(dato))
+    } catch {}
+    setUltimaCopia(dato)
+  }
   const descargarCopia = async (): Promise<RespuestaCopia> => {
     try {
-      const datos: Record<string, string> = {}
-      for (const clave of CLAVES_COPIA) {
-        const guardado = localStorage.getItem(clave)
-        if (guardado !== null) datos[clave] = guardado
-      }
-      const adjuntos: Record<string, AdjuntoEnCopia> = {}
-      for (const evento of events) {
-        for (const meta of evento.attachments ?? []) {
-          if (adjuntos[meta.id]) continue
-          try {
-            const blob = await getAttachment(meta.id)
-            if (!blob) continue
-            adjuntos[meta.id] = {
-              type: blob.type || meta.type,
-              data: await blobABase64(blob),
-            }
-          } catch {}
-        }
-      }
-      const texto = serializarCopia(armarCopia(datos, adjuntos))
+      const { texto, adjuntos, bytes } = await armarArchivoCopia()
       downloadTextFile(texto, nombreDeCopia(), "application/json")
+      anotarCopia(bytes, events.length)
       return {
         ok: true,
         text: `Copia descargada: ${cuantos(
           events.length,
           "recordatorio",
           "recordatorios",
-        )} y ${cuantos(
-          Object.keys(adjuntos).length,
-          "adjunto",
-          "adjuntos",
-        )} (${formatFileSize(new Blob([texto]).size)}).`,
+        )} y ${cuantos(adjuntos, "adjunto", "adjuntos")} (${formatFileSize(
+          bytes,
+        )}).`,
       }
     } catch {
       return {
@@ -8231,53 +8423,139 @@ export default function App() {
       }
     }
   }
-
-  // Restaurar reemplaza las claves de la copia y deja el resto del dispositivo como está. Las marcas de
-  // «ya avisado» se borran para que los recordatorios restaurados puedan volver a avisar; la última
-  // visita y el aviso de inactividad no se tocan (son del momento, no del respaldo). Al final no se
-  // recarga: se relee lo restaurado y la pantalla lo muestra en el acto, sin salir de Ajustes.
-  const restaurarCopia = async (copia: Copia): Promise<RespuestaCopia> => {
+  // Compartir: en el teléfono, el menú del sistema deja la copia en Drive, en WhatsApp o en el correo,
+  // que es donde de verdad se conserva (un archivo en Descargas se pierde con el navegador). Solo se
+  // ofrece cuando el navegador sabe compartir archivos; si no, queda la descarga de siempre.
+  const compartirCopia = async (): Promise<RespuestaCopia> => {
     try {
+      const { texto, bytes } = await armarArchivoCopia()
+      const archivo = new File([texto], nombreDeCopia(), {
+        type: "application/json",
+      })
+      await navigator.share({
+        files: [archivo],
+        title: "Copia de AVISPATE",
+        text: "Mis recordatorios de AVISPATE.",
+      })
+      anotarCopia(bytes, events.length)
+      return { ok: true, text: "Copia compartida." }
+    } catch (error) {
+      // Cancelar el menú del sistema no es un error de la app: se dice sin alarma.
+      if ((error as { name?: string })?.name === "AbortError")
+        return { ok: false, text: "No se compartió la copia." }
+      return {
+        ok: false,
+        text: "No se pudo compartir. Prueba con «Descargar copia».",
+      }
+    }
+  }
+  // Antes de tocar nada se guarda el estado actual: es lo que permite «Volver a como estaba» después de
+  // una restauración. Si la cuota no deja guardarlo, la restauración sigue (el botón no aparece).
+  const guardarParaDeshacer = () => {
+    const datos: Record<string, string> = {}
+    for (const clave of CLAVES_COPIA) {
+      const guardado = localStorage.getItem(clave)
+      if (guardado !== null) datos[clave] = guardado
+    }
+    const enviados: Record<string, string> = {}
+    for (const clave of clavesEnviadas())
+      enviados[clave] = localStorage.getItem(clave) ?? ""
+    const previo: DeshacerCopia = {
+      cuando: new Date().toISOString(),
+      datos,
+      enviados,
+    }
+    try {
+      localStorage.setItem(STORAGE_DESHACER, JSON.stringify(previo))
+    } catch {
+      return
+    }
+    setDeshacer(previo)
+  }
+  // Deja el estado de la app igual a lo que hay en localStorage. Se usa después de restaurar y después
+  // de deshacer, para que la pantalla lo muestre en el acto, sin recargar ni salir de Ajustes.
+  const releerDeStorage = () => {
+    const leidos = loadProfiles()
+    const guardado = localStorage.getItem(STORAGE_ACTIVE_PROFILE) ?? ""
+    setProfiles(leidos)
+    setActiveProfileId(
+      leidos.some((p) => p.id === guardado) ? guardado : leidos[0].id,
+    )
+    setEvents(loadEvents())
+    setNotifications(loadNotifications())
+    setCategories(loadCategories())
+    setClock12(loadClock12())
+    const oscuro = localStorage.getItem(STORAGE_DARK)
+    if (oscuro === "0" || oscuro === "1") setDark(oscuro === "1")
+    setSelectedId(null)
+    setEditingId(null)
+  }
+
+  // Restaurar (Etapa 9) o combinar (Etapa 12). Reemplazar deja solo lo del archivo —y borra las marcas
+  // de «ya avisado» para que lo restaurado pueda volver a avisar—; combinar suma lo que falta y no toca
+  // lo que ya está, así que tampoco borra esas marcas. La última visita y el aviso de inactividad no se
+  // tocan en ninguno de los dos casos: son del momento, no del respaldo. Al final no se recarga: se
+  // relee lo restaurado y la pantalla lo muestra en el acto, sin salir de Ajustes.
+  const restaurarCopia = async (
+    copia: Copia,
+    modo: ModoRestaurar = "reemplazar",
+  ): Promise<RespuestaCopia> => {
+    try {
+      guardarParaDeshacer()
+      let adjuntos = 0
+      if (modo === "combinar") {
+        const actuales: Record<string, string> = {}
+        for (const clave of CLAVES_COPIA) {
+          const guardado = localStorage.getItem(clave)
+          if (guardado !== null) actuales[clave] = guardado
+        }
+        const { datos, porClave } = combinarDatos(
+          actuales,
+          copia.datos,
+          LISTAS_COPIA,
+        )
+        for (const [clave, guardado] of Object.entries(datos))
+          localStorage.setItem(clave, guardado)
+        for (const [id, archivo] of Object.entries(copia.adjuntos)) {
+          try {
+            await saveAttachment(id, blobDesdeBase64(archivo.data, archivo.type))
+            adjuntos += 1
+          } catch {}
+        }
+        releerDeStorage()
+        const suma = (clave: string, uno: string, varios: string) =>
+          cuantos(porClave[clave]?.agregados ?? 0, uno, varios)
+        return {
+          ok: true,
+          text: `Copia combinada: se sumaron ${suma(
+            STORAGE_EVENTS,
+            "recordatorio",
+            "recordatorios",
+          )}, ${suma(STORAGE_PROFILES, "usuario", "usuarios")}, ${suma(
+            STORAGE_CATEGORIES,
+            "categoría",
+            "categorías",
+          )} y ${cuantos(adjuntos, "adjunto", "adjuntos")}. Lo que ya tenías quedó igual.`,
+        }
+      }
       for (const clave of CLAVES_COPIA) localStorage.removeItem(clave)
       for (const [clave, guardado] of Object.entries(copia.datos))
         localStorage.setItem(clave, guardado)
-      const enviados: string[] = []
-      for (let i = 0; i < localStorage.length; i++) {
-        const clave = localStorage.key(i)
-        if (clave?.startsWith(SENT_PREFIX)) enviados.push(clave)
-      }
-      enviados.forEach((clave) => localStorage.removeItem(clave))
-
-      let adjuntos = 0
+      clavesEnviadas().forEach((clave) => localStorage.removeItem(clave))
       for (const [id, archivo] of Object.entries(copia.adjuntos)) {
         try {
           await saveAttachment(id, blobDesdeBase64(archivo.data, archivo.type))
           adjuntos += 1
         } catch {}
       }
-
-      const restaurados = loadProfiles()
-      const activo = copia.datos[STORAGE_ACTIVE_PROFILE] ?? ""
-      setProfiles(restaurados)
-      setActiveProfileId(
-        restaurados.some((p) => p.id === activo) ? activo : restaurados[0].id,
-      )
-      setEvents(loadEvents())
-      setNotifications(loadNotifications())
-      setCategories(loadCategories())
-      setClock12(loadClock12())
-      const oscuro = copia.datos[STORAGE_DARK]
-      if (oscuro === "0" || oscuro === "1") setDark(oscuro === "1")
-      setSelectedId(null)
-      setEditingId(null)
-
+      releerDeStorage()
       return {
         ok: true,
         text: `Copia restaurada: ${cuantos(
           contarEnCopia(copia.datos, STORAGE_EVENTS),
           "recordatorio",
           "recordatorios",
-        )}, ${cuantos(restaurados.length, "usuario", "usuarios")} y ${cuantos(
+        )}, ${cuantos(loadProfiles().length, "usuario", "usuarios")} y ${cuantos(
           adjuntos,
           "adjunto",
           "adjuntos",
@@ -8288,6 +8566,29 @@ export default function App() {
         ok: false,
         text: "No se pudo restaurar la copia. Prueba con otro archivo.",
       }
+    }
+  }
+  // Deshacer la última restauración: deja las claves de la copia y las marcas de «ya avisado» como
+  // estaban justo antes. Los adjuntos que la restauración haya sumado se quedan en IndexedDB (no se
+  // borra nada); sin un recordatorio que los nombre simplemente no se ven.
+  const deshacerRestauracion = async (): Promise<RespuestaCopia> => {
+    if (!deshacer) return { ok: false, text: "No hay nada que deshacer." }
+    try {
+      for (const clave of CLAVES_COPIA) localStorage.removeItem(clave)
+      for (const [clave, guardado] of Object.entries(deshacer.datos))
+        localStorage.setItem(clave, guardado)
+      clavesEnviadas().forEach((clave) => localStorage.removeItem(clave))
+      for (const [clave, guardado] of Object.entries(deshacer.enviados))
+        localStorage.setItem(clave, guardado)
+      localStorage.removeItem(STORAGE_DESHACER)
+      setDeshacer(null)
+      releerDeStorage()
+      return {
+        ok: true,
+        text: "Listo: volviste a como estaba antes de restaurar.",
+      }
+    } catch {
+      return { ok: false, text: "No se pudo deshacer. Prueba de nuevo." }
     }
   }
   const addProfile = (name: string, emoji: string, photo?: string) => {
@@ -8619,7 +8920,11 @@ export default function App() {
               clock12={clock12}
               onClock12={setClock12}
               onBackup={descargarCopia}
+              onShare={compartirCopia}
               onRestore={restaurarCopia}
+              onUndo={deshacerRestauracion}
+              ultimaCopia={ultimaCopia}
+              puedeDeshacer={!!deshacer}
             />
           )}
           {screen === "tips" && (

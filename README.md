@@ -1,4 +1,4 @@
-# AVISPATE — V1.8 (Etapa 11)
+# AVISPATE — V1.9 (Etapa 12)
 
 Primera transformación del prototipo de Figma Make a una V1 funcional ejecutable como aplicación web local.
 
@@ -75,7 +75,7 @@ IP de la red.
 
 La batería E2E vive **dentro del proyecto** (`tests/`): monta el bundle real dentro de jsdom y recorre la
 app como si alguien la tocara —onboarding, crear y editar recordatorios, calendarios, archivos, usuarios,
-Ajustes, tips—. Son **10 suites y 627 comprobaciones**.
+Ajustes, tips—. Son **11 suites y 760 comprobaciones**.
 
 ```bash
 npm run build        # la batería prueba dist/: si está viejo, se avisa y no corre
@@ -89,7 +89,7 @@ Cada push a `main` y cada pull request pasan además por el robot de GitHub
 (el despliegue es cosa de Vercel). El resultado se ve en la pestaña *Actions* del repositorio.
 
 - `tests/harness.mjs` - el montaje jsdom y todas las ayudas (`montar`, `wait`, `byLabel`, `swipe`,
-  `storage`, `reporter`…). Un arreglo se hace **una vez** y vale para las diez suites.
+  `storage`, `reporter`…). Un arreglo se hace **una vez** y vale para las once suites.
 - `tests/e2e-*.mjs` - una suite por entrega. Cada una declara sus comprobaciones con `check(...)` y
   cierra con `process.exit(finish() ? 1 : 0)`.
 - `tests/run.mjs` - el runner: corre las suites en orden, resume `OK/FALLA` por suite y **falla si `dist/`
@@ -402,6 +402,34 @@ categoría, dos palabras en cualquier orden, «sin resultados», limpiar y Escap
 migración). La batería pasa de 682 a **730**. La app sube a **V1.8** y el pie de Ajustes dice
 `AVISPATE · V1.8 · Etapa 11`.
 
+## Etapa 12: la copia que se suma, se deshace y se comparte
+
+La copia de la Etapa 9 servía para cambiar de navegador, pero solo de una manera: reemplazar todo. Esta
+entrega la vuelve algo que se usa sin miedo:
+
+- **Sumar lo que falta.** Al elegir un archivo, Ajustes ya no pregunta solo «¿reemplazo?»: ofrece
+  «Sumar lo que falta» y «Sí, reemplazar todo». Sumar agrega los recordatorios, usuarios, categorías y
+  avisos cuyo id no existe (las categorías se reconocen por su nombre) y deja intacto todo lo demás: lo
+  que ya está no se pisa ni se borra, el usuario activo, el reloj y el modo oscuro de este teléfono no
+  cambian, y una categoría con el mismo nombre conserva su emoji. El final lo cuenta: «Copia combinada:
+  se sumaron 1 recordatorio, 1 usuario…».
+- **Volver a como estaba.** Antes de restaurar se guarda el estado anterior —las claves de la copia y las
+  marcas de «ya avisado», que un reemplazo borra—. Después de cualquier restauración, sumar o
+  reemplazar, Ajustes ofrece «Volver a como estaba», sin recargar la app.
+- **Compartir, no solo descargar.** Donde el navegador sabe compartir archivos (Chrome de Android,
+  Safari de iOS), «Compartir copia» abre el menú del sistema para dejarla en Drive, en WhatsApp o en el
+  correo, que es donde el archivo sobrevive a un «limpiar datos». Cancelar el menú no es un error.
+- **La copia que no se olvida.** Descargar o compartir anota la fecha, el tamaño y cuántos recordatorios
+  llevaba, y Ajustes lo dice en palabras: «Último respaldo: hoy · 12 recordatorios (48 KB)». A los 30
+  días aparece un aviso discreto para bajar una nueva.
+
+La lógica pura vive en `src/lib/copia.ts` (`combinarDatos`, `haceCuanto`) y la pantalla en
+`SettingsScreen` (`src/App.tsx`); las dos claves nuevas —`avispate.copia.ultima.v1` y
+`avispate.copia.deshacer.v1`— son del dispositivo y no viajan dentro de la copia. La suite nueva es
+`tests/e2e-copia2.mjs` (30 comprobaciones: sumar sin pisar, deshacer en los dos modos, las marcas de «ya
+avisado», la fecha del último respaldo, el aviso de los 30 días, compartir y cancelar). La batería pasa
+de 730 a **760**. La app sube a **V1.9** y el pie de Ajustes dice `AVISPATE · V1.9 · Etapa 12`.
+
 ## Etapas anteriores y numeración
 
 La app dijo **V1.5** desde la entrega de avisos múltiples, notas de voz y cámara hasta la Etapa 8. Sobre esa versión se fueron sumando entregas de trabajo que no cambiaban el número; la Etapa 9 —la copia de seguridad, la primera función nueva después de la V1.5— lo sube a **V1.6**:
@@ -420,8 +448,9 @@ La app dijo **V1.5** desde la entrega de avisos múltiples, notas de voz y cáma
 | Etapa 9 | Copia de seguridad: descargar todo en un `.json` —fotos y notas de voz en base64— y restaurarlo desde Ajustes › Datos, con resumen antes de reemplazar |
 | Etapa 10 | Avisos con la app cerrada (cola calculada en el teléfono + Supabase + cron + Edge Function), AVISPATE instalable con service worker propio y píldora de versión nueva |
 | Etapa 11 | Búsqueda en Inicio (sin tildes, por nombre, nota o categoría), posponer desde la notificación y salud de la cola en Ajustes |
+| Etapa 12 | Copia de seguridad que se suma a lo que hay o reemplaza todo, «Volver a como estaba», compartir por el menú del teléfono y recordatorio de la última copia a los 30 días |
 
-Desde la Etapa 11 la app dice **V1.8** (el pie de Ajustes: `AVISPATE · V1.8 · Etapa 11`). Las próximas
+Desde la Etapa 12 la app dice **V1.9** (el pie de Ajustes: `AVISPATE · V1.9 · Etapa 12`). Las próximas
 entregas vuelven a numerarse como etapas dentro de la misma versión; lo razonable es subir a **V2.0**
 cuando llegue el envío real por WhatsApp y correo.
 

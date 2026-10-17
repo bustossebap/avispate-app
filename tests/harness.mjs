@@ -175,6 +175,26 @@ export function montar(bundle, seed = {}, opciones = {}) {
       return null
     }
   }
+  // Menú de compartir del teléfono (Web Share API con archivos): jsdom no lo trae. Con
+  // opciones.compartir se simula, y con { cancelar: true } se simula que la persona cierra el menú
+  // sin compartir nada, que la app tiene que tratar como «no se compartió» y no como un error.
+  const shared = []
+  if (opciones.compartir) {
+    const definir = (clave, valor) =>
+      Object.defineProperty(window.navigator, clave, {
+        value: valor,
+        configurable: true,
+      })
+    definir("canShare", () => true)
+    definir("share", async (datos) => {
+      if (opciones.compartir.cancelar) {
+        const error = new Error("compartir cancelado")
+        error.name = "AbortError"
+        throw error
+      }
+      shared.push(datos)
+    })
+  }
 
   for (const [k, v] of Object.entries(seed)) window.localStorage.setItem(k, v)
   window.eval(bundle)
@@ -379,6 +399,7 @@ export function montar(bundle, seed = {}, opciones = {}) {
     downloads,
     downloadNames,
     opened,
+    shared,
     rowOf,
     deleteBtn,
     sent,

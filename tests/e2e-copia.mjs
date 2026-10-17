@@ -177,9 +177,11 @@ const subir = async (contenido, nombre = "avispate-2026-10-17.json") => {
 
 await subir(JSON.stringify(nueva))
 check(
-  "C · antes de reemplazar, muestra qué trae el archivo",
+  "C · antes de tocar nada, muestra qué trae el archivo y las dos maneras de traerlo",
   txt().includes("trae 1 recordatorio, 2 usuarios, 1 categoría y 0 adjuntos") &&
-    txt().includes("Se reemplaza lo que hay guardado ahora"),
+    txt().includes("Sumar no borra nada") &&
+    !!find("Sumar lo que falta") &&
+    !!find("Sí, reemplazar todo"),
   JSON.stringify(txt().slice(-320)),
 )
 check(
@@ -192,12 +194,12 @@ m.click(find("Cancelar"))
 await wait(80)
 check(
   "C · cancelar deja todo como estaba",
-  !txt().includes("Se reemplaza lo que hay guardado ahora") &&
+  !txt().includes("Sumar no borra nada") &&
     storage("avispate.events.v1")?.[0]?.name === "Pagar la luz",
 )
 
 await subir(JSON.stringify(nueva))
-m.click(find("Sí, restaurar"))
+m.click(find("Sí, reemplazar todo"))
 await wait(250)
 check(
   "C · restaurar reemplaza los recordatorios",

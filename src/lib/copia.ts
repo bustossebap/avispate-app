@@ -148,3 +148,101 @@ export function contarEnCopia(
     return 0
   }
 }
+
+// Etapa 12: restaurar de dos maneras. «Reemplazar» es lo de siempre (la copia manda y lo que había se
+// va); «combinar» suma lo que falta sin tocar nada de lo que ya está, que es lo que sirve para juntar
+// dos teléfonos o para recuperar algo borrado sin perder lo creado después del respaldo.
+export type ModoRestaurar = "reemplazar" | "combinar"
+
+// Cómo se reconoce un elemento repetido dentro de una lista: los recordatorios, los usuarios y los
+// avisos llevan `id`; las categorías se identifican por su nombre, que además es su clave.
+export type ListaCombinable = {
+  clave: string
+  identidad: "id" | "name"
+}
+
+export type CuentaCombinar = {
+  agregados: number
+  conservados: number
+}
+
+export type ResultadoCombinar = {
+  datos: Record<string, string>
+  porClave: Record<string, CuentaCombinar>
+  agregados: number
+  conservados: number
+}
+
+// La lista guardada como texto, sin romperse por una clave suelta: si el JSON no es una lista (o no
+// parsea), se trata como vacía. Solo quedan los objetos, que son los que tienen `id` o `name`.
+function leerLista(valor: string | undefined): Record<string, unknown>[] {
+  try {
+    const lista = JSON.parse(valor ?? "[]")
+    return Array.isArray(lista) ? lista.filter(esObjeto) : []
+  } catch {
+    return []
+  }
+}
+
+// Combina una copia con lo que hay guardado ahora. Regla de oro: lo que ya está **no se toca** —ni se
+// pisa ni se borra—; solo se agregan los elementos cuyo id (o nombre, en categorías) no existía. Las
+// claves que no son listas (reloj, modo oscuro, usuario activo) se quedan como están en este teléfono;
+// solo se toman de la copia si acá no existen, y lo mismo con cualquier clave que esta versión no
+// conozca. El texto de una lista que no recibe nada queda idéntico, byte a byte.
+export function combinarDatos(
+  actuales: Record<string, string>,
+  copia: Record<string, string>,
+  listas: ListaCombinable[],
+): ResultadoCombinar {
+  const datos: Record<string, string> = { ...actuales }
+  for (const [clave, valor] of Object.entries(copia))
+    if (!(clave in datos)) datos[clave] = valor
+
+  const porClave: Record<string, CuentaCombinar> = {}
+  let agregados = 0
+  let conservados = 0
+  for (const { clave, identidad } of listas) {
+    const actual = leerLista(actuales[clave])
+    const traida = leerLista(copia[clave])
+    const vistos = new Set(actual.map((e) => String(e[identidad])))
+    const suma: Record<string, unknown>[] = []
+    let repetidos = 0
+    for (const elemento of traida) {
+      const marca = String(elemento[identidad] ?? "")
+      if (!marca || vistos.has(marca)) {
+        repetidos += 1
+        continue
+      }
+      vistos.add(marca)
+      suma.push(elemento)
+    }
+    if (suma.length)
+      datos[clave] = JSON.stringify([...actual, ...suma])
+    porClave[clave] = { agregados: suma.length, conservados: repetidos }
+    agregados += suma.length
+    conservados += repetidos
+  }
+  return { datos, porClave, agregados, conservados }
+}
+
+// Días completos entre una fecha guardada y ahora. null si el texto no es una fecha: la pantalla lo
+// trata como «no hay dato» en vez de inventar «hace 0 días».
+export function diasDesde(iso: string, ahora: Date = new Date()): number | null {
+  const t = Date.parse(iso)
+  if (Number.isNaN(t)) return null
+  return Math.max(0, Math.floor((ahora.getTime() - t) / 86_400_000))
+}
+
+// «hoy», «ayer», «hace 12 días», «hace 2 meses»: la antigüedad del último respaldo en palabras, que es
+// lo que se lee de un vistazo. Se corta en meses y años para no decir «hace 487 días».
+export function haceCuanto(iso: string, ahora: Date = new Date()): string {
+  const dias = diasDesde(iso, ahora)
+  if (dias === null) return ""
+  if (dias === 0) return "hoy"
+  if (dias === 1) return "ayer"
+  if (dias < 30) return `hace ${dias} días`
+  const meses = Math.floor(dias / 30)
+  if (meses < 12) return meses === 1 ? "hace un mes" : `hace ${meses} meses`
+  const anios = Math.floor(dias / 365)
+  return anios === 1 ? "hace un año" : `hace ${anios} años`
+}

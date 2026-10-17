@@ -672,7 +672,7 @@ const plano = (el) =>
       }
       check(
         "V1 · el pie de Ajustes muestra versión y etapa",
-        m.txt().includes("AVISPATE · V1.8 · Etapa 11"),
+        m.txt().includes("AVISPATE · V1.9 · Etapa 12"),
         JSON.stringify(m.txt().slice(-220)),
       )
       check(

@@ -194,7 +194,7 @@ check(
 )
 check(
   "E · y la versión del pie ya es la de esta entrega",
-  txt.includes("AVISPATE · V1.8 · Etapa 11"),
+  txt.includes("AVISPATE · V1.9 · Etapa 12"),
 )
 check(
   "E · el bundle sabe suscribirse al push y registrar el service worker",
