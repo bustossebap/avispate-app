@@ -22,3 +22,6 @@ logs/
 
 # Registros de la batería E2E (tests/.logs): se regeneran en cada `npm run verificar`.
 tests/.logs/
+
+# Temporales que escribe el CLI de Supabase al enlazar el proyecto (`supabase db query --linked`).
+supabase/.temp/
