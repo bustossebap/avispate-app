@@ -26,11 +26,27 @@ import {
 import { buscarRecordatorios, hayConsulta } from "./lib/buscar"
 import { programarAvisos, type AvisoProgramado } from "./lib/cola"
 import {
+  DEFAULT_CHANNEL_PREFS,
+  channelReady,
+  deliveryChannels,
+  hayEntregaReal,
+  numeroParaEnviar,
+  type ChannelPrefs,
+  type Contact,
+} from "./lib/entrega"
+import { estadoDe, etiquetaCanal, etiquetaEstado, type EnvioReciente } from "./lib/envio"
+import {
+  asegurarNube,
+  estadoCanales,
   explicarErrorNube,
+  nubeAnotada,
   pedirAvisoDePrueba,
+  probarCanal,
   resumenCola,
   sincronizarCola,
   ultimaSubida,
+  ultimosEnvios,
+  type EstadoCanales,
   type ResumenCola,
 } from "./lib/nube"
 import {
@@ -167,9 +183,10 @@ const STORAGE_CATEGORIES = "avispate.categorias.v1"
 // notificación y la salud de la cola en Ajustes · 12: la copia que se combina, se deshace y se
 // comparte desde el teléfono, y que avisa cuando hace mucho que no se descarga · 13: deshacer los
 // borrados —recordatorio, adjunto, categoría y usuario— y ver y liberar el espacio que ocupan los
-// archivos en el dispositivo).
-const APP_VERSION = "V1.9"
-const APP_STAGE = "Etapa 13"
+// archivos en el dispositivo · 14: el envío real por WhatsApp y correo, con el estado de cada aviso
+// en Ajustes y un webhook que cuenta si el proveedor lo entregó).
+const APP_VERSION = "V2.0"
+const APP_STAGE = "Etapa 14"
 // Uso de la app: se guarda la última visita para poder avisar —una sola vez por hueco— cuando alguien
 // vuelve después de una semana o más sin abrir AVISPATE. Es el único aviso que no depende de un
 // recordatorio, así que vive aparte con su propia clave.
@@ -1550,9 +1567,8 @@ function calendarPatch(
 }
 
 // Contacto de un usuario: número de WhatsApp, correo y el "ticket" (accepted) con el que confirma que
-// esos datos son suyos. En esta V1.5 se queda en el dispositivo y los avisos por WhatsApp y correo
-// todavía se simulan (el envío real llega con el backend).
-type Contact = { phone: string ;email: string ;accepted?: boolean }
+// esos datos son suyos. El tipo y las reglas de «canal listo» viven en lib/entrega.ts desde la
+// Etapa 14, porque la cola que sube a la nube también las necesita.
 function normalizeContact(v: unknown): Contact {
   const s = v as Contact | null | undefined
   const contact: Contact = {
@@ -1567,12 +1583,6 @@ function normalizeContact(v: unknown): Contact {
 
 // Canales activados por usuario en Ajustes. WhatsApp y correo, además del interruptor, necesitan
 // sus datos: sin número o sin correo el canal no está listo.
-type ChannelPrefs = { push: boolean ;whatsapp: boolean ;email: boolean }
-const DEFAULT_CHANNEL_PREFS: ChannelPrefs = {
-  push: true,
-  whatsapp: true,
-  email: false,
-}
 function normalizeChannels(v: unknown): ChannelPrefs {
   const s = v as ChannelPrefs | null | undefined
   return {
@@ -1584,36 +1594,6 @@ function normalizeChannels(v: unknown): ChannelPrefs {
     email:
       typeof s?.email === "boolean" ? s.email : DEFAULT_CHANNEL_PREFS.email,
   }
-}
-// ¿El usuario ya confirmó sus datos de contacto (el "ticket" de Ajustes › Contacto)? Solo queda en
-// pausa si lo destildó o si acaba de escribir un dato nuevo que todavía no confirmó (accepted: false).
-function contactConfirmed(profile: Profile) {
-  return profile.contact?.accepted !== false
-}
-// ¿Este usuario puede recibir avisos por ese canal? La notificación depende del interruptor del
-// navegador; WhatsApp y correo necesitan que el usuario haya dejado sus datos y los haya confirmado.
-function channelReady(profile: Profile, channel: string) {
-  const prefs = profile.channels ?? DEFAULT_CHANNEL_PREFS
-  if (channel === "WhatsApp")
-    return (
-      prefs.whatsapp &&
-      !!profile.contact?.phone.trim() &&
-      contactConfirmed(profile)
-    )
-  if (channel === "Correo")
-    return (
-      prefs.email &&
-      !!profile.contact?.email.trim() &&
-      contactConfirmed(profile)
-    )
-  return prefs.push
-}
-// Canales del recordatorio que su dueño puede recibir de verdad. Si no tiene ninguno listo queda
-// la notificación del navegador; si ni eso (apagó las notificaciones), no hay nada que enviar.
-function deliveryChannels(event: Reminder, owner: Profile) {
-  const ready = event.channels.filter((c) => channelReady(owner, c))
-  if (ready.length) return ready
-  return channelReady(owner, "Notificación") ? ["Notificación"] : []
 }
 function timeAgo(iso: string) {
   const minutes = Math.floor((Date.now() - new Date(iso).getTime()) / 60000)
@@ -6643,11 +6623,11 @@ function SettingsScreen({
     if (resultado.estado === "activo") {
       // Al activar se sube la cola de una vez: si no, el primer aviso con la app cerrada no tendría
       // nada programado hasta el próximo cambio en los recordatorios.
-      const cola = programarAvisos(events)
+      const cola = programarAvisos(events, { perfiles: profiles })
       try {
         localStorage.setItem(STORAGE_COLA, JSON.stringify(cola))
       } catch {}
-      const subida = await sincronizarCola(cola)
+      const subida = await sincronizarCola(cola, { push: true })
       setAvisoMensaje(
         subida.ok
           ? {
@@ -6708,15 +6688,54 @@ function SettingsScreen({
     (a) => new Date(a.cuando).getTime() > Date.now(),
   )
   const subida = ultimaSubida()
+  // ------------------------------ Entrega real (Etapa 14)
+  // La tarjeta de WhatsApp y correo: qué canales tiene configurados la nube (solo booleanos), cuáles
+  // puede recibir este usuario y las últimas entregas con su estado. La configuración se consulta
+  // aunque todavía no haya push: una persona puede querer solo correo.
+  const [canalesNube, setCanalesNube] = useState<EstadoCanales | null>(null)
+  const [canalesError, setCanalesError] = useState<string | null>(null)
+  const [envios, setEnvios] = useState<EnvioReciente[]>([])
+  const [enviosError, setEnviosError] = useState<string | null>(null)
+  const [probandoCanal, setProbandoCanal] = useState<"whatsapp" | "email" | null>(
+    null,
+  )
+  const [mensajeEnvio, setMensajeEnvio] = useState<{
+    ok: boolean
+    texto: string
+  } | null>(null)
   const refrescarResumen = async () => {
-    if (estadoAvisosAhora !== "activo") return
-    const resultado = await resumenCola()
+    const canales = await estadoCanales()
+    if (canales.ok) {
+      setCanalesNube(canales.datos ?? null)
+      setCanalesError(null)
+    } else {
+      setCanalesNube(null)
+      setCanalesError(
+        explicarErrorNube(canales.error) || "No se pudo consultar la nube.",
+      )
+    }
+
+    // El resumen y el historial necesitan el dispositivo registrado. Sin push ni canales reales
+    // todavía no hay nada que pedir; la configuración de arriba ya se mostró igual.
+    if (estadoAvisosAhora !== "activo" && !nubeAnotada()) {
+      setResumen(null)
+      setEnvios([])
+      return
+    }
+    const [resultado, lista] = await Promise.all([resumenCola(), ultimosEnvios(5)])
     if (resultado.ok) {
       setResumen(resultado.datos ?? null)
       setResumenError(null)
     } else {
       setResumen(null)
       setResumenError(resultado.error || "No se pudo leer la cola de la nube.")
+    }
+    if (lista.ok) {
+      setEnvios(lista.datos ?? [])
+      setEnviosError(null)
+    } else {
+      setEnvios([])
+      setEnviosError(lista.error || "No se pudo leer el historial de envíos.")
     }
   }
   useEffect(() => {
@@ -6726,11 +6745,15 @@ function SettingsScreen({
     setRevisando(true)
     setMensajeCola(null)
     // Se recalcula igual que en App: la tarjeta no inventa una cola distinta de la que de verdad existe.
-    const cola = programarAvisos(events)
+    const cola = programarAvisos(events, { perfiles: profiles })
     try {
       localStorage.setItem(STORAGE_COLA, JSON.stringify(cola))
     } catch {}
-    const envio = await sincronizarCola(cola)
+    // Si esta persona solo usa WhatsApp o correo, el dispositivo se da de alta acá (sin push) para
+    // que la cola tenga dueño.
+    if (!pushAnotado() && !nubeAnotada() && hayEntregaReal(profiles))
+      await asegurarNube()
+    const envio = await sincronizarCola(cola, { push: pushAnotado() })
     setMensajeCola(
       envio.ok
         ? {
@@ -6749,8 +6772,46 @@ function SettingsScreen({
     await refrescarResumen()
     setRevisando(false)
   }
+  // El botón «Probar» de cada canal. Manda el destino que ya está en Contacto; la prueba entra a la
+  // misma cola y la entrega el cron, así que no hay ninguna clave en el teléfono.
+  const probarEnvio = async (canal: "whatsapp" | "email") => {
+    setProbandoCanal(canal)
+    setMensajeEnvio(null)
+    const destino =
+      canal === "whatsapp"
+        ? numeroParaEnviar(contact.phone)
+        : contact.email.trim()
+    if (!destino) {
+      setMensajeEnvio({
+        ok: false,
+        texto:
+          canal === "whatsapp"
+            ? "Primero guardá un número de WhatsApp en Contacto."
+            : "Primero guardá un correo en Contacto.",
+      })
+      setProbandoCanal(null)
+      return
+    }
+    // Sin push, el dispositivo todavía puede no existir en la nube: se registra antes de encolar.
+    if (!pushAnotado() && !nubeAnotada()) await asegurarNube()
+    const resultado = await probarCanal(canal, destino)
+    setMensajeEnvio(
+      resultado.ok
+        ? {
+            ok: true,
+            texto: `Prueba pedida: revisá ${
+              canal === "whatsapp" ? "WhatsApp" : "el correo"
+            } en menos de un minuto.`,
+          }
+        : {
+            ok: false,
+            texto: resultado.error || "No se pudo pedir la prueba.",
+          },
+    )
+    setProbandoCanal(null)
+  }
   const textoNubeCola =
-    estadoAvisosAhora !== "activo"
+    estadoAvisosAhora !== "activo" && !nubeAnotada()
       ? "sin suscripción en este dispositivo"
       : resumenError
         ? resumenError
@@ -6759,6 +6820,44 @@ function SettingsScreen({
               resumen.conError ? ` · ${resumen.conError} con error` : ""
             }`
           : "consultando…"
+  // El estado de cada canal en una línea: primero lo que depende de la persona (dato y ticket),
+  // después lo que depende de la nube (si el proveedor está configurado). Así se distingue «falta tu
+  // número» de «falta el token en Supabase» sin abrir la documentación.
+  const estadoCanal = (
+    canal: "whatsapp" | "email",
+    local: boolean,
+    dato: boolean,
+  ) => {
+    if (!local) {
+      if (!prefs[canal]) return "Canal apagado"
+      if (!dato)
+        return canal === "whatsapp"
+          ? "Falta el número en Contacto"
+          : "Falta el correo en Contacto"
+      return "Falta el ticket de Contacto"
+    }
+    if (!canalesNube)
+      return canalesError ? "No se pudo consultar la nube" : "Consultando la nube…"
+    if (!canalesNube[canal]) return "Falta configurar en la nube"
+    return "Listo para enviar"
+  }
+  const whatsappLocal = channelReady(activeProfile, "WhatsApp")
+  const emailLocal = channelReady(activeProfile, "Correo")
+  const whatsappDestino = contact.phone.trim()
+  const emailDestino = contact.email.trim()
+  // El color del estado: verde si se puede mandar, ámbar si falta algo de la persona o de la nube.
+  const colorCanal = (canal: "whatsapp" | "email", local: boolean) =>
+    local && canalesNube?.[canal]
+      ? "bg-emerald-100 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300"
+      : "bg-amber-100 dark:bg-amber-500/20 text-amber-700 dark:text-amber-300"
+  const colorEstadoEnvio = (estado: string) =>
+    estado === "entregado"
+      ? "bg-emerald-100 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300"
+      : estado === "enviado"
+        ? "bg-sky-100 dark:bg-sky-500/20 text-sky-700 dark:text-sky-300"
+        : estado === "fallido"
+          ? "bg-rose-100 dark:bg-rose-500/20 text-rose-700 dark:text-rose-300"
+          : "bg-stone-100 dark:bg-stone-800 text-stone-500 dark:text-stone-400"
   const textoAvisos =
     estadoAvisosAhora === null
       ? "Revisando este dispositivo…"
@@ -7314,8 +7413,9 @@ function SettingsScreen({
           )}
           <p className="text-[11px] text-stone-400 mt-3">
             Son los datos de {activeProfile.name}: cada usuario del dispositivo
-            tiene los suyos. Ahí llegan los avisos por WhatsApp y por correo
-            (simulados en esta V1.5).
+            tiene los suyos. Ahí llegan los avisos por WhatsApp y por correo, con
+            la app cerrada. Apagar el canal o destildar el ticket da de baja el
+            envío.
           </p>
         </div>
         <p className="text-[11px] font-bold uppercase tracking-widest text-stone-400 mb-2">
@@ -7521,6 +7621,155 @@ function SettingsScreen({
             siguen funcionando, pero no llegan con la app cerrada.
           </p>
         </div>
+        {/* Entrega real (Etapa 14): WhatsApp y correo con su estado. La nube dice qué proveedores
+            están configurados (solo booleanos) y este teléfono dice si el usuario tiene dato y ticket.
+            Lo que no se puede mandar se explica acá, sin abrir Supabase. */}
+        <div
+          data-entrega-real
+          className="bg-white dark:bg-stone-900 rounded-3xl p-5 border border-stone-100 dark:border-stone-800 mb-4"
+        >
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p className="font-semibold text-[14px]">Entrega real</p>
+              <p className="text-[12px] text-stone-400 mt-1">
+                WhatsApp y correo salen de la nube, con la app cerrada.
+                {canalesNube?.plantilla
+                  ? ` Plantilla: ${canalesNube.plantilla}.`
+                  : ""}
+              </p>
+            </div>
+          </div>
+          <div className="mt-3 pt-3 border-t border-stone-50 dark:border-stone-800">
+            {(
+              [
+                {
+                  canal: "whatsapp" as const,
+                  label: "WhatsApp",
+                  local: whatsappLocal,
+                  destino: whatsappDestino,
+                },
+                {
+                  canal: "email" as const,
+                  label: "Correo",
+                  local: emailLocal,
+                  destino: emailDestino,
+                },
+              ] as const
+            ).map((row) => (
+              <div
+                key={row.canal}
+                className="flex items-center gap-3 py-2.5 first:pt-0 last:pb-0"
+              >
+                <span className="w-9 h-9 rounded-2xl bg-amber-50 dark:bg-amber-500/20 border border-amber-200 dark:border-amber-500/40 flex items-center justify-center flex-shrink-0">
+                  {row.canal === "whatsapp" ? (
+                    <WhatsAppG className="w-5 h-5" />
+                  ) : (
+                    <span className="text-[16px] leading-none">✉️</span>
+                  )}
+                </span>
+                <div className="min-w-0 flex-1">
+                  <p className="text-[13px] font-semibold text-stone-800 dark:text-stone-100">
+                    {row.label}
+                  </p>
+                  <p className="text-[11px] text-stone-400 truncate">
+                    {row.destino || "Sin dato en Contacto"} ·{" "}
+                    {estadoCanal(row.canal, row.local, !!row.destino)}
+                  </p>
+                </div>
+                <span
+                  className={`text-[10px] font-bold px-2 py-0.5 rounded-full flex-shrink-0 ${colorCanal(
+                    row.canal,
+                    row.local,
+                  )}`}
+                >
+                  {row.local && canalesNube?.[row.canal] ? "Listo" : "Pendiente"}
+                </span>
+                <button
+                  type="button"
+                  aria-label={`Probar ${row.label}`}
+                  onClick={() => void probarEnvio(row.canal)}
+                  disabled={
+                    !row.local ||
+                    !canalesNube?.[row.canal] ||
+                    probandoCanal === row.canal
+                  }
+                  className="px-3 py-2 rounded-xl bg-amber-50 dark:bg-amber-500/20 text-amber-700 dark:text-amber-300 text-[12px] font-bold flex-shrink-0 disabled:opacity-40"
+                >
+                  {probandoCanal === row.canal ? "Probando…" : "Probar"}
+                </button>
+              </div>
+            ))}
+          </div>
+          {mensajeEnvio && (
+            <p
+              role="status"
+              className={`text-[11px] mt-2 ${
+                mensajeEnvio.ok
+                  ? "text-emerald-600 dark:text-emerald-400"
+                  : "text-rose-600 dark:text-rose-400"
+              }`}
+            >
+              {mensajeEnvio.texto}
+            </p>
+          )}
+          <p className="text-[11px] font-bold uppercase tracking-widest text-stone-400 mt-4 pt-3 border-t border-stone-50 dark:border-stone-800">
+            Últimos envíos
+          </p>
+          {envios.length === 0 ? (
+            <p className="text-[12px] text-stone-400 mt-2">
+              Todavía no se envió nada por WhatsApp ni por correo.
+            </p>
+          ) : (
+            envios.map((envio) => {
+              const estado = estadoDe(envio)
+              return (
+                <div
+                  key={`${envio.id}-${envio.canal}`}
+                  className="flex items-start gap-3 py-2.5 border-b border-stone-50 dark:border-stone-800 last:border-0"
+                >
+                  <span className="w-7 h-7 rounded-xl bg-stone-50 dark:bg-stone-800 flex items-center justify-center flex-shrink-0 mt-0.5">
+                    {envio.canal === "whatsapp" ? (
+                      <WhatsAppG className="w-3.5 h-3.5" />
+                    ) : (
+                      <span className="text-[13px] leading-none">✉️</span>
+                    )}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-[12px] font-semibold text-stone-700 dark:text-stone-200 truncate">
+                      {envio.titulo}
+                    </p>
+                    <p className="text-[10px] text-stone-400">
+                      {etiquetaCanal(envio.canal)} · {fechaYHora(envio.cuando)}
+                    </p>
+                    {estado === "fallido" && envio.error && (
+                      <p className="text-[10px] text-rose-600 dark:text-rose-400 mt-0.5">
+                        {envio.error}
+                      </p>
+                    )}
+                  </div>
+                  <span
+                    className={`text-[10px] font-bold px-2 py-0.5 rounded-full flex-shrink-0 ${colorEstadoEnvio(
+                      estado,
+                    )}`}
+                  >
+                    {etiquetaEstado(estado)}
+                  </span>
+                </div>
+              )
+            })
+          )}
+          {enviosError && (
+            <p className="text-[11px] text-stone-400 mt-2">{enviosError}</p>
+          )}
+          {canalesError && (
+            <p className="text-[11px] text-stone-400 mt-2">{canalesError}</p>
+          )}
+          <p className="text-[11px] text-stone-400 mt-3 pt-3 border-t border-stone-50 dark:border-stone-800">
+            «Enviado» es que ya salió de AVISPATE; «Entregado», que el proveedor lo
+            confirma. Los secretos viven en Supabase: acá solo se ve el estado.
+          </p>
+        </div>
+
         {/* Los tres calendarios en UNA sola burbuja: cerrada se ve el encabezado con los tres logos y la
         flecha, con el resumen de cuáles están conectados; al abrirla baja el contenido —Google, Apple y
         Outlook— dentro de la misma burbuja, y al fondo queda otra flecha para cerrarla. */}
@@ -8320,17 +8569,23 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem(STORAGE_EVENTS, JSON.stringify(events))
   }, [events])
-  // Etapa 10: la cola de avisos con la app cerrada. Se recalcula cuando cambian los recordatorios (y al
-  // abrir), se guarda en el dispositivo —la batería la mira ahí— y, si este teléfono ya está suscrito,
-  // se sube a la nube. Recalcular es barato (unas fechas) y así el servidor nunca queda con una cola
-  // vieja; subirla tarda un momento y se agrupa (ver sincronizarCola).
+  // Etapa 10: la cola de avisos con la app cerrada. Se recalcula cuando cambian los recordatorios (y
+  // al abrir), se guarda en el dispositivo —la batería la mira ahí— y, si este teléfono ya está
+  // suscrito, se sube a la nube. Desde la Etapa 14 también depende de los usuarios: sus canales y
+  // contactos deciden qué filas de WhatsApp y correo existen, y una cuenta sin push puede usar la
+  // nube igual (se registra el dispositivo sin suscripción la primera vez).
   useEffect(() => {
-    const cola = programarAvisos(events)
+    const cola = programarAvisos(events, { perfiles: profiles })
     try {
       localStorage.setItem(STORAGE_COLA, JSON.stringify(cola))
     } catch {}
-    if (pushAnotado()) void sincronizarCola(cola)
-  }, [events])
+    if (pushAnotado() || nubeAnotada())
+      void sincronizarCola(cola, { push: pushAnotado() })
+    else if (hayEntregaReal(profiles))
+      void asegurarNube().then((registro) => {
+        if (registro.ok) void sincronizarCola(cola, { push: false })
+      })
+  }, [events, profiles])
   useEffect(() => {
     localStorage.setItem(STORAGE_NOTIFICATIONS, JSON.stringify(notifications))
   }, [notifications])

@@ -19,6 +19,11 @@ import {
   type EventoRepetible,
 } from "./repeticion"
 import { avisosDe, type Alerta } from "./avisos"
+import {
+  destinosDe,
+  type CanalEntrega,
+  type PerfilEntrega,
+} from "./entrega"
 
 export type AvisoProgramado = {
   id: string
@@ -29,6 +34,15 @@ export type AvisoProgramado = {
   cuerpo: string
   emoji: string
   usuario: string
+  // Etapa 14: por dónde sale esta fila. Hasta la Etapa 13 solo existía el push; ahora un mismo aviso
+  // puede generar una fila por WhatsApp y otra por correo, con el mismo `id` y distinto `canal` (la
+  // clave de la tabla es dispositivo + id + canal). `destino` es el número en dígitos o el correo.
+  canal: CanalEntrega
+  destino?: string
+  perfilId?: string
+  // Zona horaria del teléfono (`America/Santiago`, por ejemplo). La usa la nube para escribir la
+  // fecha en el mensaje sin adivinar dónde está la persona.
+  zona?: string
 }
 
 export type EventoParaAvisar = EventoRepetible & {
@@ -39,14 +53,20 @@ export type EventoParaAvisar = EventoRepetible & {
   customReminders?: Alerta[]
   completed?: boolean
   ownerId?: string
+  // Canales elegidos en el recordatorio («Notificación», «WhatsApp», «Correo»). La cola los usa para
+  // decidir a qué destinos va cada ocurrencia desde la Etapa 14.
+  channels: string[]
 }
 
 export const DIAS_DE_COLA = 45
 // Tope por recordatorio: «cada 8 horas» durante 45 días son 135 ocurrencias; con 120 alcanza para 40
 // días y el resto se repone la próxima vez que se abra la app.
 export const MAX_POR_RECORDATORIO = 120
-// Tope total: una familia con cien recordatorios no debería subir miles de filas.
+// Tope de ocurrencias: una familia con cien recordatorios no debería subir miles de fechas.
 export const MAX_TOTAL = 600
+// Tope de filas que viajan a la nube. Una ocurrencia con los tres canales son tres filas, así que
+// 1000 deja sitio de sobra para las 600 ocurrencias (y coincide con el límite de la función SQL).
+export const MAX_FILAS = 1000
 // Cuántas fechas se caminan como máximo antes de rendirse. Es un seguro contra un dato raro (una
 // repetición que no avanza), no un límite real: las de paso fijo se saltan de un tirón.
 const MAX_PASOS = 1200
@@ -58,7 +78,21 @@ type Opciones = {
   dias?: number
   maxPorRecordatorio?: number
   maxTotal?: number
+  // Etapa 14: los usuarios del dispositivo, para decidir a qué destinos va cada aviso. Sin perfiles
+  // la cola queda como en la Etapa 13 (solo push), que es lo que usan las pruebas de esa entrega.
+  perfiles?: PerfilEntrega[]
+  zona?: string
 }
+
+// La zona del teléfono, sin romper nada si el navegador no la expone (jsdom viejo, por ejemplo).
+function zonaDelDispositivo() {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC"
+  } catch {
+    return "UTC"
+  }
+}
+
 
 // Adelanta el punto de partida cuando la fecha base quedó muy atrás, sin caminar fecha por fecha.
 // Se mueve con el reloj local (setHours / setDate) y no sumando milisegundos: así el aviso de las
@@ -91,6 +125,8 @@ export function programarAvisos(
   const dias = opciones.dias ?? DIAS_DE_COLA
   const topePorRecordatorio = opciones.maxPorRecordatorio ?? MAX_POR_RECORDATORIO
   const topeTotal = opciones.maxTotal ?? MAX_TOTAL
+  const perfiles = opciones.perfiles
+  const zona = opciones.zona ?? zonaDelDispositivo()
   const limite = new Date(ahora.getTime() + dias * 86400000)
   const cola: AvisoProgramado[] = []
 
@@ -98,6 +134,18 @@ export function programarAvisos(
     if (!evento || evento.completed) continue
     const avisos = avisosDe(evento)
     if (!avisos.length) continue
+    // El dueño del recordatorio decide los destinos. Sin la lista de usuarios (por ejemplo, una
+    // llamada vieja de la Etapa 13) se mantiene el push de siempre.
+    const ownerId = evento.ownerId || "yo"
+    const owner = perfiles?.find((p) => p.id === ownerId) ??
+      perfiles?.find((p) => p.id === "yo")
+    const destinos = !perfiles
+      ? [{ canal: "push" as const }]
+      : owner
+        ? destinosDe(evento, owner)
+        : [{ canal: "push" as const }]
+    // Un recordatorio cuyo dueño apagó todo no genera filas: no hay por dónde avisar.
+    if (!destinos.length) continue
     const mayorOffset = Math.max(...avisos.map((a) => a.offset))
     const desde = new Date(ahora.getTime() - mayorOffset * 86400000)
 
@@ -105,12 +153,14 @@ export function programarAvisos(
     ocurrencia = saltarHasta(evento, ocurrencia, desde)
 
     const emitidos: AvisoProgramado[] = []
+    let ocurrencias = 0
     let pasos = 0
-    while (pasos < MAX_PASOS && emitidos.length < topePorRecordatorio) {
+    while (pasos < MAX_PASOS && ocurrencias < topePorRecordatorio) {
       pasos += 1
       const base = parseDate(ocurrencia.date, ocurrencia.time)
       if (base.getTime() > limite.getTime()) break
 
+      const antes = emitidos.length
       for (const aviso of avisos) {
         // El aviso de días («30 días antes») sale con la misma hora del recordatorio: el motor local
         // lo da en cuanto ve el día, y para el push una hora concreta y predecible es mejor que la
@@ -118,19 +168,28 @@ export function programarAvisos(
         const cuando = new Date(base.getTime() - aviso.offset * 86400000)
         if (cuando.getTime() <= ahora.getTime() + MARGEN_MS) continue
         if (cuando.getTime() > limite.getTime()) continue
-        emitidos.push({
-          id: `${evento.id}:${ocurrencia.date}T${ocurrencia.time}:${aviso.clave}`,
-          recordatorioId: evento.id,
-          cuando: cuando.toISOString(),
-          titulo: `${evento.categoryEmoji || "🔔"} ${evento.name}`.trim(),
-          cuerpo:
-            aviso.offset === 0
-              ? `${evento.name} vence hoy.`
-              : `${evento.name} vence en ${aviso.etiqueta}.`,
-          emoji: evento.categoryEmoji || "🔔",
-          usuario: evento.ownerId || "yo",
-        })
+        for (const destino of destinos) {
+          emitidos.push({
+            id: `${evento.id}:${ocurrencia.date}T${ocurrencia.time}:${aviso.clave}`,
+            recordatorioId: evento.id,
+            cuando: cuando.toISOString(),
+            titulo: `${evento.categoryEmoji || "🔔"} ${evento.name}`.trim(),
+            cuerpo:
+              aviso.offset === 0
+                ? `${evento.name} vence hoy.`
+                : `${evento.name} vence en ${aviso.etiqueta}.`,
+            emoji: evento.categoryEmoji || "🔔",
+            usuario: ownerId,
+            canal: destino.canal,
+            ...(destino.destino ? { destino: destino.destino } : {}),
+            perfilId: owner?.id ?? ownerId,
+            zona,
+          })
+        }
       }
+      // Solo cuenta la ocurrencia que de verdad aportó avisos: la primera de una repetición por horas
+      // puede caer en el pasado y no debe gastar uno de los 120.
+      if (emitidos.length > antes) ocurrencias += 1
 
       if (evento.recurrence === "No se repite") break
       const siguiente = nextOccurrenceAt(
@@ -149,6 +208,11 @@ export function programarAvisos(
   }
 
   return cola
-    .sort((a, b) => a.cuando.localeCompare(b.cuando) || a.id.localeCompare(b.id))
-    .slice(0, topeTotal)
+    .sort(
+      (a, b) =>
+        a.cuando.localeCompare(b.cuando) ||
+        a.id.localeCompare(b.id) ||
+        a.canal.localeCompare(b.canal),
+    )
+    .slice(0, Math.min(topeTotal * 3, MAX_FILAS))
 }

@@ -6,6 +6,7 @@
 // servidor responde con error, la función devuelve { ok: false } y la vida sigue igual (los avisos
 // locales, como siempre). Por eso no se lanzan excepciones: la pantalla decide qué contar.
 import type { AvisoProgramado } from "./cola"
+import type { EnvioReciente } from "./envio"
 
 export type RespuestaNube = { ok: boolean; error?: string }
 export type Dispositivo = { id: string; token: string }
@@ -19,6 +20,15 @@ export type ResumenCola = {
   conError: number
   proximo: string | null
   ultimoEnviado: string | null
+}
+
+// La configuración de canales de la nube (Etapa 14). Son solo booleanos: la función de entrega dice
+// si tiene lo necesario para mandar por cada vía, nunca el valor de un secreto.
+export type EstadoCanales = {
+  push: boolean
+  whatsapp: boolean
+  email: boolean
+  plantilla: string | null
 }
 
 // El último intento de subir la cola, tal como quedó en este teléfono. Se guarda aunque falle: saber que
@@ -39,7 +49,26 @@ export const CLAVE_PUSH = (import.meta.env.VITE_VAPID_PUBLIC_KEY || "").trim()
 
 const CLAVE_DISPOSITIVO = "avispate.dispositivo.v1"
 const CLAVE_SUBIDA = "avispate.cola.subida.v1"
+// Etapa 14: el dispositivo ya existe en la nube. No significa «tiene push»: una persona puede querer
+// solo WhatsApp o correo, y la cola igual necesita un dispositivo registrado al que pertenecer.
+const CLAVE_REGISTRO = "avispate.nube.v1"
 const ESPERA_ANTES_DE_SUBIR = 1500
+const URL_FUNCION = `${URL_NUBE}/functions/v1/enviar-avisos`
+
+export function nubeAnotada() {
+  try {
+    return localStorage.getItem(CLAVE_REGISTRO) === "1"
+  } catch {
+    return false
+  }
+}
+
+function marcarNube() {
+  try {
+    localStorage.setItem(CLAVE_REGISTRO, "1")
+  } catch {}
+}
+
 
 // Los códigos internos no se muestran crudos en pantalla: «sin-red» no le dice nada a nadie.
 export function explicarErrorNube(error?: string) {
@@ -185,13 +214,25 @@ export async function registrarDispositivo(
   push: { endpoint: string; p256dh: string; auth: string } | null,
 ): Promise<RespuestaNube> {
   const { id, token } = dispositivo()
-  return rpc("registrar_dispositivo", {
+  const respuesta = await rpc("registrar_dispositivo", {
     p_dispositivo: id,
     p_token: token,
     p_nombre: nombreDelDispositivo(),
     p_push: push,
   })
+  if (respuesta.ok) marcarNube()
+  return respuesta
 }
+
+// Da de alta el dispositivo sin suscripción push. Es lo que hace falta para que la cola de WhatsApp
+// y correo tenga dueño aunque esta persona no quiera notificaciones del navegador.
+export async function asegurarNube(): Promise<RespuestaNube> {
+  if (!nubeLista()) return { ok: false, error: "sin-nube" }
+  if (!hayRed()) return { ok: false, error: "sin-red" }
+  if (nubeAnotada()) return { ok: true }
+  return registrarDispositivo(null)
+}
+
 
 export async function olvidarDispositivo(): Promise<RespuestaNube> {
   const { id, token } = dispositivo()
@@ -203,17 +244,26 @@ let temporizador: ReturnType<typeof setTimeout> | null = null
 // Sube la cola entera, pero no en cada tecla: se espera un momento para que crear un recordatorio (que
 // toca varios estados seguidos) suba una sola vez. La promesa se resuelve con el resultado del envío
 // que de verdad salió, y si llega otro cambio antes se reemplaza por el nuevo.
-export function sincronizarCola(avisos: AvisoProgramado[]): Promise<RespuestaNube> {
+//
+// `push: false` deja las filas de notificación en el teléfono: una cuenta que solo usa WhatsApp o
+// correo no debe subir pushes que la nube no puede entregar. Las filas de WhatsApp y correo viajan
+// igual.
+export function sincronizarCola(
+  avisos: AvisoProgramado[],
+  opciones: { push?: boolean } = {},
+): Promise<RespuestaNube> {
+  const filas =
+    opciones.push === false ? avisos.filter((a) => a.canal !== "push") : avisos
   // Los dos casos en que ni se intenta también quedan anotados: la tarjeta de salud tiene que poder
   // decir «el último intento no llegó» aunque el teléfono esté sin red.
   if (!nubeLista()) {
     const respuesta = { ok: false, error: "sin-nube" }
-    anotarSubida(avisos.length, respuesta)
+    anotarSubida(filas.length, respuesta)
     return Promise.resolve(respuesta)
   }
   if (!hayRed()) {
     const respuesta = { ok: false, error: "sin-red" }
-    anotarSubida(avisos.length, respuesta)
+    anotarSubida(filas.length, respuesta)
     return Promise.resolve(respuesta)
   }
   if (temporizador) clearTimeout(temporizador)
@@ -224,16 +274,20 @@ export function sincronizarCola(avisos: AvisoProgramado[]): Promise<RespuestaNub
       const respuesta = await rpc("sincronizar_avisos", {
         p_dispositivo: id,
         p_token: token,
-        p_avisos: avisos.map((a) => ({
+        p_avisos: filas.map((a) => ({
           id: a.id,
           recordatorioId: a.recordatorioId,
           cuando: a.cuando,
           titulo: a.titulo,
           cuerpo: a.cuerpo,
           emoji: a.emoji,
+          canal: a.canal,
+          ...(a.destino ? { destino: a.destino } : {}),
+          ...(a.perfilId ? { perfilId: a.perfilId } : {}),
+          ...(a.zona ? { zona: a.zona } : {}),
         })),
       })
-      anotarSubida(avisos.length, respuesta)
+      anotarSubida(filas.length, respuesta)
       resolver(respuesta)
     }, ESPERA_ANTES_DE_SUBIR)
   })
@@ -260,3 +314,82 @@ export async function resumenCola(): Promise<{
   if (!respuesta.ok) return { ok: false, error: explicarErrorNube(respuesta.error) }
   return { ok: true, datos: (respuesta.datos ?? undefined) as ResumenCola | undefined }
 }
+
+// La configuración de canales de la nube (Etapa 14). Es un GET a la misma función que entrega los
+// avisos: responde solo booleanos y el nombre de la plantilla, así que se puede pedir desde el
+// teléfono sin exponer ningún secreto. Si la función todavía no está publicada, devuelve error y la
+// tarjeta lo cuenta; la app sigue funcionando.
+export async function estadoCanales(): Promise<{
+  ok: boolean
+  datos?: EstadoCanales
+  error?: string
+}> {
+  if (!nubeLista()) return { ok: false, error: "sin-nube" }
+  if (!hayRed()) return { ok: false, error: "sin-red" }
+  try {
+    const respuesta = await fetch(URL_FUNCION, {
+      method: "GET",
+      headers: {
+        apikey: CLAVE_NUBE,
+        Authorization: `Bearer ${CLAVE_NUBE}`,
+      },
+    })
+    if (!respuesta.ok)
+      return { ok: false, error: mensajeDeError(respuesta.status) }
+    const datos = (await respuesta.json().catch(() => null)) as
+      | { canales?: Partial<EstadoCanales> }
+      | null
+    const canales = datos?.canales
+    if (!canales || typeof canales !== "object")
+      return { ok: false, error: "La nube no devolvió el estado de los canales." }
+    return {
+      ok: true,
+      datos: {
+        push: !!canales.push,
+        whatsapp: !!canales.whatsapp,
+        email: !!canales.email,
+        plantilla:
+          typeof canales.plantilla === "string" ? canales.plantilla : null,
+      },
+    }
+  } catch {
+    return { ok: false, error: "No se pudo llegar a la nube: revisá tu conexión." }
+  }
+}
+
+// Una prueba de WhatsApp o correo: la fila entra a la misma cola y sale en la próxima pasada del
+// cron (menos de un minuto). No se manda desde el teléfono: los secretos viven solo en Supabase.
+export async function probarCanal(
+  canal: "whatsapp" | "email",
+  destino: string,
+): Promise<RespuestaNube> {
+  const { id, token } = dispositivo()
+  return rpc("probar_canal", {
+    p_dispositivo: id,
+    p_token: token,
+    p_canal: canal,
+    p_destino: destino,
+    p_zona: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
+  })
+}
+
+// El historial de envíos reales (Etapa 14). Devuelve las últimas filas de WhatsApp y correo con su
+// estado; la tarjeta de Ajustes lo pide al entrar y cuando se toca «Revisar ahora».
+export async function ultimosEnvios(limite = 5): Promise<{
+  ok: boolean
+  datos?: EnvioReciente[]
+  error?: string
+}> {
+  const { id, token } = dispositivo()
+  const respuesta = await pedir("ultimos_envios", {
+    p_dispositivo: id,
+    p_token: token,
+    p_limite: limite,
+  })
+  if (!respuesta.ok) return { ok: false, error: explicarErrorNube(respuesta.error) }
+  const datos = Array.isArray(respuesta.datos)
+    ? (respuesta.datos as EnvioReciente[])
+    : []
+  return { ok: true, datos }
+}
+

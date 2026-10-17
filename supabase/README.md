@@ -1,16 +1,21 @@
-# Nube de AVISPATE · Etapas 10 y 11 (avisos con la app cerrada)
+# Nube de AVISPATE · Etapas 10 a 14 (avisos con la app cerrada y entrega real)
 
-Supabase hace tres cosas y ninguna cuesta un peso: guarda la suscripción de cada teléfono, guarda la
-cola de avisos que el teléfono calculó y, cada minuto, llama a una función que entrega lo que ya
-venció. El servidor **no** calcula fechas: las repeticiones y la zona horaria viven en el teléfono.
+Supabase guarda la suscripción de cada teléfono y la cola de avisos que el teléfono calculó. Cada
+minuto, un cron llama a una función que entrega lo que ya venció por el canal de cada fila: **push**
+(notificación del navegador), **WhatsApp** (Cloud API de Meta) o **correo** (Resend). El servidor
+**no** calcula fechas: las repeticiones y la zona horaria viven en el teléfono.
 
 ```
-teléfono (calcula {cuando, titulo, cuerpo})
+teléfono (calcula {cuando, titulo, cuerpo, canal, destino, zona})
       │  POST /rest/v1/rpc/sincronizar_avisos
       ▼
-Supabase · tablas dispositivos + avisos  ◀── cron cada minuto ──▶ Edge Function enviar-avisos
-      │                                                                    │
-      └──────────────────── push (VAPID) ◀──────────────────────────────────┘
+Supabase · dispositivos + avisos  ◀── cron cada minuto ──▶ Edge Function enviar-avisos
+      │                                                          │
+      │                          ┌──────── push (VAPID) ◀────────┤
+      │                          ├──────── WhatsApp Cloud API ◀──┤
+      │                          └──────── Resend ◀───────────────┤
+      │                                                          ▼
+      └──────────── webhook de estados ◀──── enviar-avisos / webhooks-envio
 ```
 
 ## Puesta en marcha (una sola vez)
@@ -41,7 +46,21 @@ Supabase · tablas dispositivos + avisos  ◀── cron cada minuto ──▶ E
       and proname in ('posponer_aviso', 'resumen_cola');
    ```
 
-2. **Secretos de la función.** El proyecto ya tiene las claves VAPID en `.env.local` (que no se
+   **Etapa 14.** Por último, `supabase/migrations/0003_etapa14.sql` (tampoco lleva marcadores). Agrega
+   `canal`, `destino`, `perfil_id`, `zona`, `estado`, `entregado_en`, `proveedor_id` y
+   `proximo_intento`; cambia la clave de `avisos` a `(dispositivo_id, id, canal)`; crea `probar_canal`,
+   `ultimos_envios` y la vista `envios`; y vuelve a crear `sincronizar_avisos` y `resumen_cola`. Al
+   final, estas dos consultas deben devolver las funciones nuevas y una clave que incluya `canal`:
+
+   ```sql
+   select proname from pg_proc
+    where pronamespace = 'public'::regnamespace
+      and proname in ('probar_canal', 'ultimos_envios', 'sincronizar_avisos', 'resumen_cola');
+   select pg_get_constraintdef(oid) from pg_constraint
+    where conrelid = 'public.avisos'::regclass and contype = 'p';
+   ```
+
+2. **Secretos de las funciones.** El proyecto ya tiene las claves VAPID en `.env.local` (que no se
    versiona). Se suben a Supabase así:
 
    ```bash
@@ -50,24 +69,51 @@ Supabase · tablas dispositivos + avisos  ◀── cron cada minuto ──▶ E
    npx --yes supabase@latest secrets set --env-file supabase/.env.functions
    ```
 
-   El `--yes` evita que `npx` se quede esperando un «Ok to proceed?» que nadie ve.
+   El `--yes` evita que `npx` se quede esperando un «Ok to proceed?» que nadie ve. Para la Etapa 14,
+   `supabase/.env.functions` suma (con los valores de las cuentas, nunca en el repo):
 
-3. **Publicar la función.**
+   | Secreto | Para qué |
+   | --- | --- |
+   | `WHATSAPP_TOKEN` | token permanente de la app de Meta (System User) |
+   | `WHATSAPP_PHONE_ID` | id del número verificado en WhatsApp Business |
+   | `WHATSAPP_TEMPLATE` | nombre de la plantilla de utilidad aprobada (por defecto `avispate_recordatorio`) |
+   | `WHATSAPP_TEMPLATE_LANG` | idioma de la plantilla (`es` por defecto) |
+   | `WHATSAPP_API_VERSION` | opcional; `v21.0` por defecto |
+   | `RESEND_API_KEY` | clave de Resend con permiso de envío |
+   | `EMAIL_FROM` | remitente verificado, por ejemplo `AVISPATE <avisos@avispate.app>` |
+   | `WHATSAPP_VERIFY_TOKEN` | palabra que se pega en la consola de Meta para verificar el webhook |
+   | `WHATSAPP_APP_SECRET` | App Secret de Meta, para validar `x-hub-signature-256` |
+   | `RESEND_WEBHOOK_SECRET` | secreto `whsec_…` del webhook de Resend (Svix) |
+   | `WEBHOOK_TOKEN` | respaldo simple para probar el webhook con `?secreto=…` |
+
+   Si falta un grupo de secretos, ese canal queda «Falta configurar en la nube» en Ajustes y la
+   función falla solo esas filas; el push y los avisos locales siguen funcionando.
+
+3. **Publicar las funciones.** La de entrega y la de estados:
 
    ```bash
    npx --yes supabase@latest functions deploy enviar-avisos --project-ref vmctsurhswayrrwrkggj
+   npx --yes supabase@latest functions deploy webhooks-envio --project-ref vmctsurhswayrrwrkggj --no-verify-jwt
    ```
 
-   Queda con la verificación de JWT activada (la de por defecto): el cron manda la anon key, que es un
-   JWT válido del proyecto y ya es pública.
+   `enviar-avisos` queda con la verificación de JWT activada (la de por defecto): el cron y la app
+   mandan la anon key, que es un JWT válido del proyecto y ya es pública. `webhooks-envio` se publica
+   **sin** esa verificación porque Meta y Resend no mandan un JWT de Supabase: la función se protege
+   sola con la firma del proveedor (o con `WEBHOOK_TOKEN`). Si la dejás con JWT, el gateway responde
+   401 antes de que la función pueda validar la firma.
 
-   Desde la Etapa 11 el payload lleva también el id del aviso (es lo que permite posponer desde la
-   notificación): si venís de la Etapa 10, **volvé a publicar la función** con este mismo comando.
+   Desde la Etapa 14 la entrega también manda WhatsApp y correo: si venís de la Etapa 11, **volvé a
+   publicar `enviar-avisos`** con este mismo comando.
 
-4. **Probar la función a mano** (debería responder `{"ok":true,"enviados":0,…}`):
+4. **Probar a mano.** El GET dice qué canales están configurados (solo booleanos); el POST entrega lo
+   vencido:
 
    ```bash
    source .env.local
+   curl -s "https://vmctsurhswayrrwrkggj.supabase.co/functions/v1/enviar-avisos" \
+     -H "Authorization: Bearer $VITE_SUPABASE_ANON_KEY"
+   # {"ok":true,"canales":{"push":true,"whatsapp":true,"email":true,"plantilla":"avispate_recordatorio"}}
+
    curl -s -X POST "https://vmctsurhswayrrwrkggj.supabase.co/functions/v1/enviar-avisos" \
      -H "Authorization: Bearer $VITE_SUPABASE_ANON_KEY" \
      -H "Content-Type: application/json" -d '{}'
@@ -80,19 +126,90 @@ Supabase · tablas dispositivos + avisos  ◀── cron cada minuto ──▶ E
    ```
 
    En Ajustes → *Avisos con la app cerrada* → *Activar avisos* → *Probar aviso*. La prueba llega en
-   menos de un minuto, con la app cerrada.
+   menos de un minuto, con la app cerrada. Para WhatsApp y correo, la tarjeta **«Entrega real»** dice
+   si falta el dato, el ticket o la configuración de la nube, y tiene su propio «Probar» por canal.
+
+## WhatsApp y correo (Etapa 14)
+
+### WhatsApp Cloud API
+
+1. En **Meta for Developers**, creá (o abrí) la app de AVISPATE y agregá el producto **WhatsApp**. En
+   *WhatsApp → API Setup* copiá el **Phone number ID** (`WHATSAPP_PHONE_ID`).
+2. Generá un **token permanente** desde un System User de Meta Business (`WHATSAPP_TOKEN`) con los
+   permisos `whatsapp_business_messaging` y `whatsapp_business_management`. El token temporal del panel
+   vence en 24 h y no sirve para producción.
+3. Creá la **plantilla de utilidad** en *WhatsApp Manager → Message templates*. Nombre:
+   `avispate_recordatorio` (o el que pongas en `WHATSAPP_TEMPLATE`), idioma `es`, categoría
+   *Utility*, cuerpo con tres variables:
+
+   ```
+   {{1}}
+   {{2}}
+   Fecha: {{3}}
+   ```
+
+   AVISPATE manda en `{{1}}` el título con emoji, en `{{2}}` el mensaje («… vence en 2 días») y en
+   `{{3}}` la fecha en la zona horaria del teléfono. Los valores de ejemplo de la plantilla deben
+   respetar ese orden; Meta los revisa y puede tardar unas horas.
+4. **Webhook.** En *WhatsApp → Configuration*, URL de callback:
+   `https://vmctsurhswayrrwrkggj.supabase.co/functions/v1/webhooks-envio` y verify token
+   `WHATSAPP_VERIFY_TOKEN`. Suscribí el campo `messages` (ahí llegan los estados `sent`, `delivered`,
+   `read` y `failed`). La función responde el `hub.challenge` y valida `x-hub-signature-256` con
+   `WHATSAPP_APP_SECRET`.
+
+### Correo con Resend
+
+1. Agregá el dominio en **Resend → Domains** y copiá los registros DNS que indica: **SPF**, **DKIM** y
+   un **DMARC** mínimo (`v=DMARC1; p=none; rua=mailto:…`) para empezar a mirar rebotes. Sin DKIM
+   verificado, Resend rechaza el envío desde ese dominio.
+2. Creá una **API key** de envío (`RESEND_API_KEY`) y poné el remitente verificado en `EMAIL_FROM`
+   (`"AVISPATE <avisos@avispate.app>"`, entre comillas en `.env.functions`).
+3. **Webhook.** En *Resend → Webhooks*, URL
+   `https://vmctsurhswayrrwrkggj.supabase.co/functions/v1/webhooks-envio`, eventos `email.sent`,
+   `email.delivered`, `email.bounced`, `email.complained` y `email.failed`. Copiá el secreto
+   `whsec_…` a `RESEND_WEBHOOK_SECRET`; la función valida la firma Svix con cinco minutos de
+   tolerancia.
+
+### Cómo se entrega y qué pasa si falla
+
+- El cron llama a `enviar-avisos` cada minuto. Cada fila se **reclama** antes de mandarse
+  (`proximo_intento` pasa a +5 min), así dos pasadas cruzadas no duplican un envío.
+- Un fallo incrementa `intentos`, guarda `ultimo_error` y deja `proximo_intento` con espera creciente
+  (1, 2, 4, 8… minutos, tope 1 h). A los 5 intentos la fila queda `fallido` y se explica en Ajustes.
+- Hay un **tope diario** de 60 WhatsApp + correo por dispositivo en 24 h; al alcanzarlo, las filas
+  esperan 12 h. Es un seguro contra bucles, no un límite de producto.
+- El **push** se marca `entregado` cuando el servicio lo acepta (no tiene webhook). WhatsApp y correo
+  pasan a `entregado` solo cuando el proveedor lo confirma.
+- Los estados nunca retroceden: un `delivered` atrasado no pisa un `entregado`, y un `sent` solo
+  asciende desde `en_cola`.
+- Meta solo permite plantillas fuera de la ventana de 24 h; por eso todos los avisos usan la
+  plantilla aprobada y no texto libre. Si la plantilla cambia de nombre o de idioma, se actualizan
+  `WHATSAPP_TEMPLATE` y `WHATSAPP_TEMPLATE_LANG` y se vuelve a publicar la función (los secretos se
+  leen en cada invocación, así que no hace falta tocar el código).
+
+### Probar sin esperar al cron
+
+En Ajustes → *Avisos con la app cerrada* → **Entrega real** → «Probar». La prueba se encola como
+cualquier aviso y sale en la próxima pasada (menos de un minuto). El estado aparece en «Últimos
+envíos» al tocar «Revisar ahora» en la tarjeta de salud o al volver a Ajustes.
 
 ## Cómo está protegido
 
 - Las tablas tienen RLS **sin políticas**: la clave pública que viaja al navegador no puede leer ni
   escribir nada directamente.
 - Las cuatro funciones de la Etapa 10 (`registrar_dispositivo`, `olvidar_push`, `sincronizar_avisos`,
-  `probar_aviso`) y las dos de la Etapa 11 (`posponer_aviso`, `resumen_cola`) son `security definer` y
-  exigen el **token** del dispositivo (32 bytes al azar, guardados solo en ese teléfono). El id del
-  dispositivo solo no alcanza.
+  `probar_aviso`), las dos de la Etapa 11 (`posponer_aviso`, `resumen_cola`) y las dos de la Etapa 14
+  (`probar_canal`, `ultimos_envios`) son `security definer` y exigen el **token** del dispositivo
+  (32 bytes al azar, guardados solo en ese teléfono). El id del dispositivo solo no alcanza.
 - La función de entrega usa la `service_role` (secreta, la pone Supabase sola) y no acepta datos: solo
-  lee lo vencido y manda.
-- La `VAPID_PRIVATE_KEY` nunca entra al bundle: no lleva el prefijo `VITE_`, así que Vite no la expone.
+  lee lo vencido y manda. El webhook también usa `service_role`, pero solo actualiza filas cuyo
+  `proveedor_id` coincide con el id que devolvió el proveedor; no puede crear envíos nuevos.
+- `destino` (número o correo) es un dato personal y vive en la base igual que el contacto del usuario:
+  no se muestra en ninguna tabla pública, y la vista `envios` está revocada para `anon`. Si más
+  adelante hay cuentas (Etapa 15), esa columna entra en la política de RLS por usuario.
+- Los secretos de WhatsApp y correo (`WHATSAPP_TOKEN`, `RESEND_API_KEY`, etc.) solo existen como
+  variables de entorno de la función: el GET de estado devuelve booleanos y el nombre de la plantilla,
+  nunca sus valores. La `VAPID_PRIVATE_KEY` tampoco entra al bundle porque no lleva el prefijo `VITE_`.
 
 ## Posponer desde la notificación (Etapa 11)
 
@@ -127,3 +244,11 @@ central y no un lujo.
 | `ultimo_error` en `avisos` | Ahí queda el motivo que devolvió el servicio de push (claves VAPID distintas, por ejemplo). |
 | «Posponer» abre la app en vez de posponer | Falta correr la `0002_etapa11.sql`, o el teléfono no tiene guardadas sus credenciales: *Apagar* y *Activar avisos* de nuevo. |
 | La notificación no muestra los botones | El teléfono o el navegador no permiten acciones en las notificaciones (iOS viejo, por ejemplo): tocarla abre la app, que es el camino de siempre. |
+| Ajustes dice «Falta configurar en la nube» en WhatsApp | Faltan `WHATSAPP_TOKEN` y `WHATSAPP_PHONE_ID` en los secretos, o el token temporal venció (24 h). Usá el token permanente del System User. |
+| Meta responde `132000` o «template not found» | `WHATSAPP_TEMPLATE` / `WHATSAPP_TEMPLATE_LANG` no coinciden con la plantilla aprobada, o la plantilla todavía está en revisión. |
+| WhatsApp falla con `131047` (re-engagement) | Pasaron más de 24 h desde el último mensaje de la persona y la plantilla no está aprobada como *Utility*. Revisá la categoría en WhatsApp Manager. |
+| El correo no sale y Resend dice `403` | El dominio no está verificado (SPF/DKIM) o `EMAIL_FROM` usa otro remitente. Revisá *Domains* en Resend. |
+| Los correos llegan a spam | Falta DMARC o el dominio es nuevo: publicá `_dmarc`, calentá el dominio y revisá las quejas en Resend. |
+| «Entregado» nunca aparece | El webhook no está configurado o la firma falla. Mirá los logs de `webhooks-envio`; el estado queda en `enviado`. |
+| `401` en el webhook | La firma no coincide (secreto equivocado) o falta `?secreto=WEBHOOK_TOKEN`. Meta y Resend firman distinto: cada uno tiene su secreto. |
+| Ajustes muestra «Falló» con el motivo | Ese es el `ultimo_error` real del proveedor. Después de corregir la causa, la próxima sincronización repone las filas futuras; una prueba manual confirma el arreglo. |

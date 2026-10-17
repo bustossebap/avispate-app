@@ -1,4 +1,4 @@
-# AVISPATE — V1.9 (Etapa 13)
+# AVISPATE — V2.0 (Etapa 14)
 
 Primera transformación del prototipo de Figma Make a una V1 funcional ejecutable como aplicación web local.
 
@@ -18,7 +18,7 @@ Primera transformación del prototipo de Figma Make a una V1 funcional ejecutabl
 - Historial local de avisos.
 - Motor local que revisa los recordatorios al abrir la app y cada minuto mientras está abierta.
 - Notificaciones del navegador cuando el permiso está concedido.
-- Selección de WhatsApp como canal, con simulación local en esta V1.
+- Selección de WhatsApp como canal, con envío real por la Cloud API de Meta (plantilla de utilidad) y correo por Resend.
 - Número de WhatsApp con extensión de país en bandera (Chile 🇨🇱 por defecto).
 - Cada usuario del dispositivo con su nombre, su emoji (de la rejilla o de la lista completa de emojis), su foto, sus canales y sus calendarios.
 - Categorías propias: agregar, reordenar y eliminar desde Inicio (o al crear un recordatorio), eligiendo al eliminar si sus recordatorios se borran o quedan sin categoría.
@@ -32,6 +32,7 @@ Primera transformación del prototipo de Figma Make a una V1 funcional ejecutabl
 - Búsqueda en Inicio: la lupa filtra por nombre, nota o categoría, sin exigir tildes ni mayúsculas y respetando la categoría elegida.
 - Posponer desde la notificación: «Posponer 10 min» o «Posponer 1 hora» mueve el aviso en la nube sin abrir la app.
 - Salud de la cola (Ajustes): cuántos avisos hay en este teléfono, qué tiene la nube y cuándo se subió por última vez, con «Revisar ahora».
+- Entrega real (Ajustes): estado de WhatsApp y correo, botones «Probar», últimos envíos con canal y estado, y el motivo cuando el proveedor falla. Las filas de la cola viajan por canal con destino, usuario y zona horaria; los secretos viven solo en Supabase.
 - Deshacer cualquier borrado: recordatorios, adjuntos, categorías (en sus dos salidas) y usuarios completos, desde el aviso que aparece abajo.
 - Espacio en el dispositivo (Ajustes): cuánto ocupan los textos, las fotos y las notas de voz, y un botón para liberar los archivos que ya no usa ningún recordatorio.
 
@@ -77,7 +78,7 @@ IP de la red.
 
 La batería E2E vive **dentro del proyecto** (`tests/`): monta el bundle real dentro de jsdom y recorre la
 app como si alguien la tocara —onboarding, crear y editar recordatorios, calendarios, archivos, usuarios,
-borrar y deshacer, Ajustes, tips—. Son **12 suites y 799 comprobaciones**.
+borrar y deshacer, Ajustes, tips—. Son **17 suites y 840 comprobaciones**.
 
 ```bash
 npm run build        # la batería prueba dist/: si está viejo, se avisa y no corre
@@ -91,7 +92,7 @@ Cada push a `main` y cada pull request pasan además por el robot de GitHub
 (el despliegue es cosa de Vercel). El resultado se ve en la pestaña *Actions* del repositorio.
 
 - `tests/harness.mjs` - el montaje jsdom y todas las ayudas (`montar`, `wait`, `byLabel`, `swipe`,
-  `storage`, `reporter`…). Un arreglo se hace **una vez** y vale para las doce suites.
+  `storage`, `reporter`…). Un arreglo se hace **una vez** y vale para todas las suites.
 - `tests/e2e-*.mjs` - una suite por entrega. Cada una declara sus comprobaciones con `check(...)` y
   cierra con `process.exit(finish() ? 1 : 0)`.
 - `tests/run.mjs` - el runner: corre las suites en orden, resume `OK/FALLA` por suite y **falla si `dist/`
@@ -486,22 +487,56 @@ La app dijo **V1.5** desde la entrega de avisos múltiples, notas de voz y cáma
 | Etapa 12 | Copia de seguridad que se suma a lo que hay o reemplaza todo, «Volver a como estaba», compartir por el menú del teléfono y recordatorio de la última copia a los 30 días |
 | Etapa 13 | Deshacer los borrados (recordatorio, adjunto, categoría y usuario completo) y ver y liberar el espacio que ocupan los archivos en el dispositivo |
 
-Desde la Etapa 12 la app dice **V1.9** (el pie de Ajustes: `AVISPATE · V1.9 · Etapa 13`). La Etapa 13
-no cambia el número; lo razonable es subir a **V2.0** cuando llegue el envío real por WhatsApp y correo.
+Desde la Etapa 12 la app decía **V1.9**; la Etapa 14 sube a **V2.0** (el pie de Ajustes:
+`AVISPATE · V2.0 · Etapa 14`) porque cierra lo que hasta acá era una simulación: WhatsApp y correo
+salen de verdad.
 
-## Roadmap: de la V1.9 a la V3.1
+## Etapa 14: entrega real por WhatsApp y correo
+
+Hasta acá WhatsApp y correo existían en la interfaz, en el ticket de Contacto y en la cola, pero el
+envío se quedaba en el teléfono. Esta entrega cierra esa simulación:
+
+- **Una fila por canal.** `programarAvisos` decide, para cada ocurrencia, qué canales puede recibir su
+  dueño (`src/lib/entrega.ts`) y emite una fila por cada uno: `push`, `whatsapp` o `email`, con el
+  mismo id y distinto `canal`. La clave de la tabla pasa a `(dispositivo, id, canal)`; WhatsApp viaja
+  en dígitos y el correo en minúsculas, junto al `perfilId` y la zona horaria del teléfono.
+- **La nube entrega.** La Edge Function `enviar-avisos` conserva el push (VAPID) y suma dos
+  adaptadores: la **Cloud API de Meta** con una plantilla de utilidad de tres variables (recordatorio,
+  mensaje y fecha) y **Resend** con correo HTML + texto. Los secretos (`WHATSAPP_TOKEN`,
+  `WHATSAPP_PHONE_ID`, `WHATSAPP_TEMPLATE`, `RESEND_API_KEY`, `EMAIL_FROM`) viven en Supabase y nunca
+  entran al bundle; el teléfono solo pide un GET con booleanos para saber qué está configurado.
+- **Estado, no solo «enviado».** `avisos` gana `estado` (`en_cola`, `enviado`, `entregado`,
+  `fallido`), `entregado_en`, `proveedor_id` y `proximo_intento`. La función reclama la fila antes de
+  mandarla (dos pasadas del cron no duplican), reintenta con espera creciente (1, 2, 4… minutos, tope
+  1 h), respeta un tope diario por dispositivo y explica el último error.
+- **Webhook autenticado.** `webhooks-envio` verifica la firma de Meta (`x-hub-signature-256`) y la de
+  Resend (Svix), o un `WEBHOOK_TOKEN` compartido como respaldo, y pasa la fila a «Entregado» o
+  «Falló». Un estado atrasado nunca hace retroceder otro.
+- **Ajustes cuenta la verdad.** La tarjeta «Entrega real» muestra, por canal, si falta el dato, el
+  ticket o la configuración de la nube; ofrece «Probar» solo cuando se puede; y lista los últimos
+  envíos con canal, estado y motivo del fallo. Una cuenta sin push también sube su cola: el
+  dispositivo se registra igual para que WhatsApp y correo tengan dueño.
+- **Sin nube, nada se rompe.** Sin configuración, sin red o sin las migraciones, la app sigue con los
+  avisos locales y la tarjeta lo explica en vez de fallar.
+
+La cuenta de Meta Business, la plantilla aprobada y el dominio con SPF/DKIM/DMARC siguen siendo
+trámites externos que tardan unos días; el código queda listo para el día que existan y la guía de
+`supabase/README.md` explica el alta paso a paso. La suite nueva es `tests/e2e-envio.mjs` (41
+comprobaciones: separación por canal, consentimiento, destinos, lo que sube a la nube, la tarjeta, los
+botones de prueba, el modo sin red, la migración y las dos Edge Functions). La batería pasa de 799 a
+**840**.
+
+## Roadmap: de la V2.0 a la V3.1
 
 Esto es un plan, no una promesa: los esfuerzos son semanas de una persona y se ajustan al ritmo real. El
-orden no es casual. Primero se cierra lo que hoy es una simulación (WhatsApp y correo); después se
-resuelve la cuenta, porque sin cuenta no hay sincronización ni colaboración; recién con esa base estable
-se conectan los calendarios y las listas compartidas. Al final se pule la captura, la accesibilidad y la
-operación, y la app se empaqueta para las tiendas. La regla de oro no cambia: **sin nube configurada
-AVISPATE sigue funcionando sola**, y ninguna entrega se publica sin `npm run verificar` en verde y su
-suite nueva.
+orden no es casual. Con el envío real ya cerrado, sigue la cuenta, porque sin cuenta no hay
+sincronización ni colaboración; recién con esa base estable se conectan los calendarios y las listas
+compartidas. Al final se pule la captura, la accesibilidad y la operación, y la app se empaqueta para
+las tiendas. La regla de oro no cambia: **sin nube configurada AVISPATE sigue funcionando sola**, y
+ninguna entrega se publica sin `npm run verificar` en verde y su suite nueva.
 
 | Etapa | Versión | Qué agrega | Esfuerzo |
 | --- | --- | --- | --- |
-| 14 | V2.0 | Envío real por WhatsApp y correo, con estado de cada aviso | 3–4 semanas |
 | 15 | V2.1 | Cuenta y sincronización entre teléfonos | 6–8 semanas |
 | 16 | V2.2 | Calendarios de ida y vuelta (Google, Outlook, Apple) | 4–6 semanas |
 | 17 | V2.3 | Listas y espacios compartidos | 4–6 semanas |
@@ -511,7 +546,7 @@ suite nueva.
 | 21 | V3.0 | Apps nativas iOS y Android | 5–7 semanas |
 | 22 | V3.1 | Lanzamiento público y soporte | 2–3 semanas |
 
-En total, entre **31 y 44 semanas** de trabajo de una persona, sin contar los tiempos de revisión de las
+En total, entre **28 y 40 semanas** de trabajo de una persona, sin contar los tiempos de revisión de las
 tiendas. Las etapas 18 y 19 pueden correr en paralelo con la 16 o la 17 si hay más de una persona; las
 demás tienen dependencias duras y no conviene adelantarlas.
 
@@ -519,26 +554,6 @@ demás tienen dependencias duras y no conviene adelantarlas.
 README y el pie de Ajustes actualizado; las migraciones de datos se prueban con archivos de la versión
 anterior y nunca rompen una copia de seguridad; los secretos viven en Supabase, jamás en el bundle; y
 publicar sigue siendo un paso aparte (`npm run verificar -- --deploy`) que se hace solo cuando se pide.
-
-### Etapa 14 · Entrega real por WhatsApp y correo (V2.0)
-
-**Objetivo:** que un recordatorio llegue de verdad a un teléfono o a un correo, con la app cerrada, y
-que se sepa qué pasó con cada envío. Hoy el canal existe en la interfaz y en la cola, pero el envío real
-es el pendiente más grande del producto.
-
-- WhatsApp por la **Cloud API de Meta**, con plantillas de utilidad aprobadas (nombre, título, fecha,
-  categoría) y el enlace `wa.me` como respaldo cuando no hay plantilla o la persona prefiere mandarlo a
-  mano. Verificación del número y consentimiento explícito por usuario; baja y “no molestar” por canal.
-- Correo por un proveedor transaccional (Resend o SES) con dominio propio, SPF, DKIM y DMARC, y manejo
-  de rebotes y quejas.
-- Tabla `envios` con estado (`en cola`, `enviado`, `entregado`, `falló`), clave de idempotencia, reintentos
-  con espera creciente, tope diario por usuario y el último error explicado en Ajustes › Avisos.
-- Plantillas en español, horas de silencio y zona horaria por usuario; texto plano como respaldo.
-- Webhooks del proveedor para actualizar estados, sin exponer secretos al cliente.
-
-**Terminada cuando:** un recordatorio real llega a un WhatsApp y a un correo con la app cerrada; el
-estado se ve en Ajustes y en el historial; un fallo se reintenta y se explica; la suite corre contra el
-sandbox de los proveedores y hay una prueba manual documentada. `supabase/README.md` explica el alta.
 
 ### Etapa 15 · Cuenta y sincronización entre teléfonos (V2.1)
 
@@ -678,8 +693,9 @@ documentados y queda el informe de lanzamiento con lo aprendido y el roadmap de 
 Apps de escritorio nativas, SSO empresarial y consola de administración, un asistente con IA que invente
 recordatorios, publicidad y un mercado de plantillas. Si alguna entra, será una etapa nueva con su propio
 número: este roadmap termina en la V3.1, con AVISPATE instalable, sincronizada, colaborativa y en las
-tiendas. La Etapa 14 es la próxima; conviene iniciar ya las verificaciones externas que tardan (cuenta de
-Meta Business, dominio y proveedor de correo) para que no frenen el código.
+tiendas. La Etapa 15 es la próxima. Conviene iniciar ya las verificaciones externas que tardan (cuenta de Meta
+Business, dominio y proveedor de correo) para que no frenen el código; el código de la Etapa 14 ya está
+listo para usarlas.
 
 ## Preguntas sobre el permiso de notificaciones y el aviso de inactividad
 

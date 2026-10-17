@@ -121,6 +121,11 @@ export function montar(bundle, seed = {}, opciones = {}) {
   )
   window.onerror = (m) => errors.push(String(m))
 
+  // Red de mentira (Etapa 14): las suites de WhatsApp y correo necesitan ver qué sube la cola y qué
+  // devuelve la nube sin un Supabase de verdad. El bundle usa `fetch` en el momento de llamar, así
+  // que instalarlo acá antes de evaluar alcanza; la suite decide qué responder y anota las llamadas.
+  if (opciones.fetch) window.fetch = opciones.fetch
+
   // Avisos del navegador de mentira: se ve el permiso, se puede pedir y se cuentan los enviados.
   const sent = []
   const state = {

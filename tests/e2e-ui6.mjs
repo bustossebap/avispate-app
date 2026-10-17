@@ -1023,6 +1023,6 @@ check(
     !bundle.includes("Descargar archivo .ics") &&
     !bundle.includes("no irá a tu calendario."),
 )
-check("D · la entrega en curso es la Etapa 13", bundle.includes("Etapa 13"))
+check("D · la entrega en curso es la Etapa 14", bundle.includes("Etapa 14"))
 
 process.exit(finish() ? 1 : 0)
