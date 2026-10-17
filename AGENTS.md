@@ -22,6 +22,8 @@ This is the canonical project structure. Start with task-relevant files below. O
 - `.mise.toml` - Toolchain version for Node.js (24); dependencies are installed and run with npm (single `package-lock.json`)
 - `tests/` - The jsdom E2E battery: `harness.mjs` (shared mounting and helpers), `e2e-*.mjs` (one suite per delivery), `run.mjs` (runner). Run it with `npm test`; it needs a fresh `dist/` (`npm run build` first).
 - `scripts/verificar.sh` - The loop: types → build → local battery; with `--deploy` also publishes to Vercel and runs the live battery (`npm run verificar` / `npm run verificar -- --deploy`).
+- `.github/workflows/verificar.yml` - GitHub Actions: on every push to `main` and every pull request it runs `npm ci`, `format:check` and `npm run verificar` (no deploy; Vercel handles publishing).
+- `src/lib/copia.ts` - Backup file format (`.json` with `localStorage` keys plus base64 attachments) and its validation; kept out of `App.tsx` so the format can be read and tested on its own.
 - `.vscode/settings.json` - Live Server pointed at `dist/` (root `/dist`, port 5500, host `0.0.0.0`). Serve the built app with `npm run build:watch` and open `dist/` with Live Server; the build uses a relative `base` (`./assets/…`) so `dist/` works from any root, Vercel included.
 
 ## Verification

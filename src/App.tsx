@@ -1,5 +1,15 @@
 import { useEffect, useRef, useState } from "react"
 import { createPortal } from "react-dom"
+import {
+  armarCopia,
+  contarEnCopia,
+  leerCopia,
+  nombreDeCopia,
+  serializarCopia,
+  type AdjuntoEnCopia,
+  type Copia,
+  type RespuestaCopia,
+} from "./lib/copia"
 
 // Los modales de la app (la hoja de emojis y la foto) se dibujan con un portal dentro del marco de la
 // app —el `div` con id `app-frame`— y no dentro del formulario que los abre. Motivo: cualquier ancestro
@@ -109,9 +119,11 @@ const STORAGE_CATEGORIES = "avispate.categorias.v1"
 // canales a la vista y ticket de contacto · 4: hora estable, Google por usuario e inactividad ·
 // 5: emoji propio en todas partes y sincronización con Apple Calendar y Outlook · 6: la avispa de
 // Inicio, la foto de usuario, repetir por horas, la extensión del número y los tips · 7: el renombre
-// de RECUERDA a AVISPATE, con sus claves guardadas renombradas y migradas).
-const APP_VERSION = "V1.5"
-const APP_STAGE = "Etapa 7"
+// de RECUERDA a AVISPATE, con sus claves guardadas renombradas y migradas · 8: la app publicada en
+// avispate-app.vercel.app y la batería en vivo arreglada (los assets con `./`) · 9: la copia de
+// seguridad, que saca y devuelve todo en un .json).
+const APP_VERSION = "V1.6"
+const APP_STAGE = "Etapa 9"
 // Uso de la app: se guarda la última visita para poder avisar —una sola vez por hueco— cuando alguien
 // vuelve después de una semana o más sin abrir AVISPATE. Es el único aviso que no depende de un
 // recordatorio, así que vive aparte con su propia clave.
@@ -119,6 +131,22 @@ const STORAGE_LAST_SEEN = "avispate.ultimaVisita.v1"
 const STORAGE_INACTIVITY = "avispate.avisosInactividad.v1"
 const INACTIVITY_DAYS = 7
 const INACTIVITY_MESSAGE = "Bzzt… no te olvides de no olvidarte, ¡avíspate!"
+// Lo que viaja en la copia de seguridad: el contenido de la persona (sus recordatorios, sus usuarios,
+// sus categorías y el historial de avisos) y sus preferencias de este dispositivo. Quedan afuera las
+// claves de uso —la última visita, el aviso de inactividad y los `avispate.sent.*` de «ya avisado»—:
+// son del momento, no del respaldo, y restaurarlas haría que la app se comporte como si el tiempo no
+// hubiera pasado. Los adjuntos van aparte, desde IndexedDB (ver src/lib/copia.ts).
+const CLAVES_COPIA = [
+  STORAGE_EVENTS,
+  STORAGE_PROFILES,
+  STORAGE_CATEGORIES,
+  STORAGE_NOTIFICATIONS,
+  STORAGE_ONBOARDING,
+  STORAGE_ACTIVE_PROFILE,
+  STORAGE_CLOCK,
+  STORAGE_DARK,
+]
+
 // Claves de la V1.5, cuando el contacto y Google Calendar eran un único dato global. Ahora viven
 // dentro de cada usuario: estas claves se leen una sola vez al abrir la app (migración) y se borran.
 // Van juntas y arriba a propósito: la migración las usa apenas arranca el módulo.
@@ -615,6 +643,27 @@ async function deleteAttachment(id: string) {
     })
     db.close()
   } catch {}
+}
+// Copia de seguridad y adjuntos: un .json no puede llevar archivos, así que las fotos y notas de voz
+// viajan como base64. Se convierte por trozos porque un `String.fromCharCode(...bytes)` de un audio de
+// varios MB revienta la pila de llamadas.
+async function blobABase64(blob: Blob): Promise<string> {
+  const bytes = new Uint8Array(await blob.arrayBuffer())
+  let binario = ""
+  const trozo = 0x8000
+  for (let i = 0; i < bytes.length; i += trozo)
+    binario += String.fromCharCode(...bytes.subarray(i, i + trozo))
+  return btoa(binario)
+}
+function blobDesdeBase64(data: string, type: string): Blob {
+  const binario = atob(data)
+  const bytes = new Uint8Array(binario.length)
+  for (let i = 0; i < binario.length; i++) bytes[i] = binario.charCodeAt(i)
+  return new Blob([bytes], { type: type || "application/octet-stream" })
+}
+// «1 recordatorio» / «3 recordatorios»: el resumen de la copia se lee como una frase.
+function cuantos(n: number, uno: string, varios: string) {
+  return `${n} ${n === 1 ? uno : varios}`
 }
 function formatFileSize(size: number) {
   if (size < 1024) return `${size} B`
@@ -1270,13 +1319,12 @@ function icsFileName(text: string, fallback: string) {
       .slice(0, 40) || fallback
   }.ics`
 }
-// Descarga del .ics. Si el navegador no sabe armar archivos (o los bloquea) la app sigue igual: lo
-// único que se pierde es la descarga, nunca el guardado del recordatorio.
-function downloadIcsText(content: string, fileName: string) {
+// Descarga de un archivo de texto (el .ics de un recordatorio o la copia de seguridad). Si el
+// navegador no sabe armar archivos (o los bloquea) la app sigue igual: lo único que se pierde es la
+// descarga, nunca el guardado.
+function downloadTextFile(content: string, fileName: string, type: string) {
   try {
-    const url = URL.createObjectURL(
-      new Blob([content], { type: "text/calendar;charset=utf-8" }),
-    )
+    const url = URL.createObjectURL(new Blob([content], { type }))
     const link = document.createElement("a")
     link.href = url
     link.download = fileName
@@ -1285,6 +1333,9 @@ function downloadIcsText(content: string, fileName: string) {
     link.remove()
     window.setTimeout(() => URL.revokeObjectURL(url), 1000)
   } catch {}
+}
+function downloadIcsText(content: string, fileName: string) {
+  downloadTextFile(content, fileName, "text/calendar;charset=utf-8")
 }
 function downloadIcs(event: Reminder) {
   downloadIcsText(buildIcs(event), icsFileName(event.name, "recordatorio"))
@@ -6064,6 +6115,8 @@ function SettingsScreen({
   onTips,
   clock12,
   onClock12,
+  onBackup,
+  onRestore,
 }: {
   events: Reminder[]
   dark: boolean
@@ -6079,7 +6132,71 @@ function SettingsScreen({
   onTips: () => void
   clock12: boolean
   onClock12: (v: boolean) => void
+  onBackup: () => Promise<RespuestaCopia>
+  onRestore: (copia: Copia) => Promise<RespuestaCopia>
 }) {
+  // Copia de seguridad: el archivo se elige acá mismo y antes de reemplazar nada se muestra qué trae.
+  // El mensaje del final es del último intento (descarga, restauración o error) y se queda a la vista.
+  const [mensaje, setMensaje] = useState<RespuestaCopia | null>(null)
+  const [pendiente, setPendiente] = useState<{
+    nombre: string
+    copia: Copia
+    cuenta: string
+  } | null>(null)
+  const [ocupado, setOcupado] = useState(false)
+  const archivoCopia = useRef<HTMLInputElement | null>(null)
+  const descargar = async () => {
+    setOcupado(true)
+    setPendiente(null)
+    setMensaje(await onBackup())
+    setOcupado(false)
+  }
+  const leerArchivo = async (file: File | undefined) => {
+    if (!file) return
+    setMensaje(null)
+    setPendiente(null)
+    let texto = ""
+    try {
+      texto = await file.text()
+    } catch {
+      setMensaje({ ok: false, text: "No se pudo leer el archivo." })
+      return
+    }
+    const leido = leerCopia(texto)
+    if (!leido.ok) {
+      setMensaje({ ok: false, text: leido.error })
+      return
+    }
+    const { datos, adjuntos } = leido.copia
+    setPendiente({
+      nombre: file.name,
+      copia: leido.copia,
+      cuenta: `${cuantos(
+        contarEnCopia(datos, STORAGE_EVENTS),
+        "recordatorio",
+        "recordatorios",
+      )}, ${cuantos(
+        contarEnCopia(datos, STORAGE_PROFILES),
+        "usuario",
+        "usuarios",
+      )}, ${cuantos(
+        contarEnCopia(datos, STORAGE_CATEGORIES),
+        "categoría",
+        "categorías",
+      )} y ${cuantos(
+        Object.keys(adjuntos).length,
+        "adjunto",
+        "adjuntos",
+      )}`,
+    })
+  }
+  const confirmarRestaurar = async () => {
+    if (!pendiente) return
+    setOcupado(true)
+    setMensaje(await onRestore(pendiente.copia))
+    setPendiente(null)
+    setOcupado(false)
+  }
   // Los canales y el contacto salen del usuario activo: al cambiar de usuario, Ajustes muestra lo
   // suyo. El permiso del navegador, en cambio, es del dispositivo (se pide una sola vez).
   const prefs = activeProfile.channels ?? DEFAULT_CHANNEL_PREFS
@@ -6949,6 +7066,87 @@ function SettingsScreen({
           <p className="text-[12px] text-stone-400 mt-1">
             Se almacenan localmente en este navegador.
           </p>
+          {/* Etapa 9: la copia de seguridad. Descargar deja un .json con todo; restaurar lo devuelve
+              después de mostrar qué trae, porque reemplaza lo que hay guardado ahora. */}
+          <div className="mt-4 pt-4 border-t border-stone-100 dark:border-stone-800">
+            <p className="text-[13px] font-semibold text-stone-700 dark:text-stone-200">
+              Copia de seguridad
+            </p>
+            <p className="text-[12px] text-stone-400 mt-1">
+              Un archivo con tus recordatorios, usuarios, categorías, fotos y
+              notas de voz. Sirve para cambiar de navegador o para no perder
+              nada si se limpia este.
+            </p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={descargar}
+                disabled={ocupado}
+                className="px-4 py-2.5 rounded-xl bg-amber-600 text-white text-[13px] font-bold disabled:opacity-50"
+              >
+                {ocupado ? "Un momento…" : "Descargar copia"}
+              </button>
+              <button
+                type="button"
+                onClick={() => archivoCopia.current?.click()}
+                disabled={ocupado}
+                className="px-4 py-2.5 rounded-xl bg-stone-100 dark:bg-stone-800 text-stone-700 dark:text-stone-200 text-[13px] font-bold disabled:opacity-50"
+              >
+                Restaurar desde archivo
+              </button>
+            </div>
+            <input
+              ref={archivoCopia}
+              type="file"
+              accept=".json,application/json"
+              aria-label="Archivo de copia de seguridad"
+              className="hidden"
+              onChange={(e) => {
+                const elegido = e.target.files?.[0]
+                // El campo se vacía para que elegir el mismo archivo otra vez vuelva a disparar el
+                // cambio; el File ya está guardado en `elegido`, así que limpiarlo no lo invalida.
+                e.target.value = ""
+                void leerArchivo(elegido)
+              }}
+            />
+            {pendiente && (
+              <div className="mt-3 rounded-2xl bg-amber-50 dark:bg-amber-500/10 p-3">
+                <p className="text-[12px] text-stone-600 dark:text-stone-300">
+                  «{pendiente.nombre}» trae {pendiente.cuenta}. Se reemplaza lo
+                  que hay guardado ahora.
+                </p>
+                <div className="mt-2 flex gap-2">
+                  <button
+                    type="button"
+                    onClick={confirmarRestaurar}
+                    disabled={ocupado}
+                    className="px-3 py-2 rounded-xl bg-amber-600 text-white text-[12px] font-bold disabled:opacity-50"
+                  >
+                    Sí, restaurar
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPendiente(null)}
+                    className="px-3 py-2 rounded-xl bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-700 text-stone-600 dark:text-stone-300 text-[12px] font-bold"
+                  >
+                    Cancelar
+                  </button>
+                </div>
+              </div>
+            )}
+            {mensaje && (
+              <p
+                role="status"
+                className={`mt-3 text-[12px] ${
+                  mensaje.ok
+                    ? "text-emerald-600 dark:text-emerald-400"
+                    : "text-red-500 dark:text-red-400"
+                }`}
+              >
+                {mensaje.text}
+              </p>
+            )}
+          </div>
           <button
             onClick={onReset}
             className="mt-4 text-red-500 dark:text-red-400 text-[13px] font-semibold"
@@ -7541,6 +7739,111 @@ export default function App() {
     setScreen("home")
     setTab("home")
   }
+
+  // Copia de seguridad (Etapa 9): se arma con lo que hay guardado en este momento y se descarga como un
+  // .json. Los adjuntos se leen de IndexedDB uno por uno; si alguno ya no está (o el navegador no deja
+  // abrir la base), la copia sale igual, sin ese archivo y sin romper nada.
+  const descargarCopia = async (): Promise<RespuestaCopia> => {
+    try {
+      const datos: Record<string, string> = {}
+      for (const clave of CLAVES_COPIA) {
+        const guardado = localStorage.getItem(clave)
+        if (guardado !== null) datos[clave] = guardado
+      }
+      const adjuntos: Record<string, AdjuntoEnCopia> = {}
+      for (const evento of events) {
+        for (const meta of evento.attachments ?? []) {
+          if (adjuntos[meta.id]) continue
+          try {
+            const blob = await getAttachment(meta.id)
+            if (!blob) continue
+            adjuntos[meta.id] = {
+              type: blob.type || meta.type,
+              data: await blobABase64(blob),
+            }
+          } catch {}
+        }
+      }
+      const texto = serializarCopia(armarCopia(datos, adjuntos))
+      downloadTextFile(texto, nombreDeCopia(), "application/json")
+      return {
+        ok: true,
+        text: `Copia descargada: ${cuantos(
+          events.length,
+          "recordatorio",
+          "recordatorios",
+        )} y ${cuantos(
+          Object.keys(adjuntos).length,
+          "adjunto",
+          "adjuntos",
+        )} (${formatFileSize(new Blob([texto]).size)}).`,
+      }
+    } catch {
+      return {
+        ok: false,
+        text: "No se pudo preparar la copia. Prueba de nuevo.",
+      }
+    }
+  }
+
+  // Restaurar reemplaza las claves de la copia y deja el resto del dispositivo como está. Las marcas de
+  // «ya avisado» se borran para que los recordatorios restaurados puedan volver a avisar; la última
+  // visita y el aviso de inactividad no se tocan (son del momento, no del respaldo). Al final no se
+  // recarga: se relee lo restaurado y la pantalla lo muestra en el acto, sin salir de Ajustes.
+  const restaurarCopia = async (copia: Copia): Promise<RespuestaCopia> => {
+    try {
+      for (const clave of CLAVES_COPIA) localStorage.removeItem(clave)
+      for (const [clave, guardado] of Object.entries(copia.datos))
+        localStorage.setItem(clave, guardado)
+      const enviados: string[] = []
+      for (let i = 0; i < localStorage.length; i++) {
+        const clave = localStorage.key(i)
+        if (clave?.startsWith(SENT_PREFIX)) enviados.push(clave)
+      }
+      enviados.forEach((clave) => localStorage.removeItem(clave))
+
+      let adjuntos = 0
+      for (const [id, archivo] of Object.entries(copia.adjuntos)) {
+        try {
+          await saveAttachment(id, blobDesdeBase64(archivo.data, archivo.type))
+          adjuntos += 1
+        } catch {}
+      }
+
+      const restaurados = loadProfiles()
+      const activo = copia.datos[STORAGE_ACTIVE_PROFILE] ?? ""
+      setProfiles(restaurados)
+      setActiveProfileId(
+        restaurados.some((p) => p.id === activo) ? activo : restaurados[0].id,
+      )
+      setEvents(loadEvents())
+      setNotifications(loadNotifications())
+      setCategories(loadCategories())
+      setClock12(loadClock12())
+      const oscuro = copia.datos[STORAGE_DARK]
+      if (oscuro === "0" || oscuro === "1") setDark(oscuro === "1")
+      setSelectedId(null)
+      setEditingId(null)
+
+      return {
+        ok: true,
+        text: `Copia restaurada: ${cuantos(
+          contarEnCopia(copia.datos, STORAGE_EVENTS),
+          "recordatorio",
+          "recordatorios",
+        )}, ${cuantos(restaurados.length, "usuario", "usuarios")} y ${cuantos(
+          adjuntos,
+          "adjunto",
+          "adjuntos",
+        )}.`,
+      }
+    } catch {
+      return {
+        ok: false,
+        text: "No se pudo restaurar la copia. Prueba con otro archivo.",
+      }
+    }
+  }
   const addProfile = (name: string, emoji: string, photo?: string) => {
     const p: Profile = {
       id: uid(),
@@ -7869,6 +8172,8 @@ export default function App() {
               onTips={() => setScreen("tips")}
               clock12={clock12}
               onClock12={setClock12}
+              onBackup={descargarCopia}
+              onRestore={restaurarCopia}
             />
           )}
           {screen === "tips" && (

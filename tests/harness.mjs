@@ -148,8 +148,9 @@ export function montar(bundle, seed = {}, opciones = {}) {
     })
     if (notif.supported !== false) window.Notification = Fake
   }
-  // Descargas (.ics) y ventanas nuevas (Outlook / Google Calendar), que jsdom no implementa.
+  // Descargas (.ics, .json) y ventanas nuevas (Outlook / Google Calendar), que jsdom no implementa.
   const downloads = []
+  const downloadNames = []
   const opened = []
   if (opciones.descargas) {
     window.URL.createObjectURL = (blob) => {
@@ -157,6 +158,18 @@ export function montar(bundle, seed = {}, opciones = {}) {
       return `blob:recuerda-${downloads.length}`
     }
     window.URL.revokeObjectURL = () => {}
+    // El nombre del archivo viaja en el atributo `download` del <a> que la app toca: se anota el clic
+    // para poder comprobarlo (jsdom no dispara ninguna descarga de verdad).
+    const clickOriginal = window.HTMLAnchorElement.prototype.click
+    window.HTMLAnchorElement.prototype.click = function () {
+      const nombre = this.getAttribute("download")
+      if (nombre) {
+        downloadNames.push(nombre)
+        // jsdom no descarga: dejar que siga solo ensucia la salida con «Not implemented: navigation».
+        return
+      }
+      return clickOriginal.call(this)
+    }
     window.open = (url) => {
       opened.push(String(url))
       return null
@@ -364,6 +377,7 @@ export function montar(bundle, seed = {}, opciones = {}) {
     nombreInput,
     download,
     downloads,
+    downloadNames,
     opened,
     rowOf,
     deleteBtn,

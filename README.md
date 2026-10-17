@@ -1,6 +1,8 @@
-# AVISPATE — V1.5 local (Etapa 7)
+# AVISPATE — V1.6 (Etapa 9)
 
 Primera transformación del prototipo de Figma Make a una V1 funcional ejecutable como aplicación web local.
+
+[![verificar](https://github.com/bustossebap/avispate-app/actions/workflows/verificar.yml/badge.svg)](https://github.com/bustossebap/avispate-app/actions/workflows/verificar.yml)
 
 **Publicada en <https://avispate-app.vercel.app>**. El enlace anterior, `recuerdapapi.vercel.app`, sigue vivo y sirve la misma versión.
 
@@ -24,6 +26,7 @@ Primera transformación del prototipo de Figma Make a una V1 funcional ejecutabl
 - Sección de tips con consejos de uso (Ajustes › Ver tips).
 - Onboarding recordado entre sesiones.
 - Interfaz responsive: teléfono completo en móvil y marco de teléfono en escritorio.
+- Copia de seguridad: todo en un solo `.json` que se descarga y se restaura desde Ajustes › Datos.
 
 ## Ejecutar
 
@@ -67,7 +70,7 @@ IP de la red.
 
 La batería E2E vive **dentro del proyecto** (`tests/`): monta el bundle real dentro de jsdom y recorre la
 app como si alguien la tocara —onboarding, crear y editar recordatorios, calendarios, archivos, usuarios,
-Ajustes, tips—. Son **9 suites y 604 comprobaciones**.
+Ajustes, tips—. Son **10 suites y 627 comprobaciones**.
 
 ```bash
 npm run build        # la batería prueba dist/: si está viejo, se avisa y no corre
@@ -76,16 +79,20 @@ npm run verificar    # tipos → build → batería local (no publica)
 npm run verificar -- --deploy   # además publica en Vercel y corre la batería en vivo
 ```
 
+Cada push a `main` y cada pull request pasan además por el robot de GitHub
+(`.github/workflows/verificar.yml`): `npm ci` desde cero, formato y la batería completa, **sin publicar**
+(el despliegue es cosa de Vercel). El resultado se ve en la pestaña *Actions* del repositorio.
+
 - `tests/harness.mjs` - el montaje jsdom y todas las ayudas (`montar`, `wait`, `byLabel`, `swipe`,
-  `storage`, `reporter`…). Un arreglo se hace **una vez** y vale para las nueve suites.
+  `storage`, `reporter`…). Un arreglo se hace **una vez** y vale para las diez suites.
 - `tests/e2e-*.mjs` - una suite por entrega. Cada una declara sus comprobaciones con `check(...)` y
   cierra con `process.exit(finish() ? 1 : 0)`.
 - `tests/run.mjs` - el runner: corre las suites en orden, resume `OK/FALLA` por suite y **falla si `dist/`
   es más viejo que `src/`** (la trampa de probar una entrega anterior).
 - `scripts/verificar.sh` - tipos → build → batería local (no publica); con `--deploy`, el bucle completo con el bundle publicado comparado byte a byte contra el local
-  y la batería corrida **dos veces** (contra `dist/` y contra `https://recuerdapapi.vercel.app`). Los
+  y la batería corrida **dos veces** (contra `dist/` y contra `https://avispate-app.vercel.app`). Los
   registros quedan en `tests/.logs/`.
-- La batería en vivo, si hiciera falta, se pide a mano con `LIVE_BASE=https://recuerdapapi.vercel.app npm test`.
+- La batería en vivo, si hiciera falta, se pide a mano con `LIVE_BASE=https://avispate-app.vercel.app npm test`.
 
 Dos detalles del entorno que conviene saber:
 
@@ -110,7 +117,14 @@ La opción WhatsApp está preparada a nivel de UX y modelo de datos, pero **no e
 
 ## Datos
 
-Los recordatorios se guardan en el navegador mediante `localStorage`. El botón “Restaurar datos de demostración” vuelve a cargar los ejemplos iniciales.
+Los recordatorios se guardan en el navegador mediante `localStorage`; las fotos y notas de voz, en
+`IndexedDB`. El botón «Restaurar datos de demostración» vuelve a cargar los ejemplos iniciales.
+
+Desde la Etapa 9, **Ajustes › Datos › Copia de seguridad** descarga un `avispate-AAAA-MM-DD.json` con
+los recordatorios, usuarios, categorías, preferencias e historial de avisos —más las fotos y notas de
+voz en base64— y **Restaurar desde archivo** lo devuelve: antes de reemplazar nada muestra qué trae el
+archivo. Las marcas de «ya avisado», la última visita y el aviso de inactividad no viajan (son del
+momento); al restaurar, las de «ya avisado» se borran para que lo recuperado pueda volver a avisar.
 
 
 ## V1.2
@@ -267,9 +281,50 @@ su novena suite, `tests/e2e-marca.mjs`: comprueba la marca nueva en el bundle y 
 más importa— que la migración de las claves deja los recordatorios, usuarios, categorías, ajustes y el
 contacto en su sitio, sin pisar los datos que ya estuvieran en las claves nuevas.
 
+## Etapa 8: publicada en avispate-app.vercel.app
+
+La app dejó de ser solo local: está publicada en <https://avispate-app.vercel.app> (los alias
+`recuerdapapi.vercel.app` y `recuerdaapp-bustossebap.vercel.app` siguen sirviendo la misma versión).
+
+- **El nombre**: `avispate.vercel.app` estaba ocupado por otra app, así que el proyecto pasó a
+  `avispate-app` conservando su id y su historial de despliegues.
+- **El bug que la batería en vivo tapaba**: con `base: "./"`, `index.html` pide `./assets/…`, pero el
+  harness buscaba `/assets/…`; la corrida contra la URL publicada devolvía 0/0 sin explicar nada desde
+  el cambio de `base`. Ahora resuelve cada `src` contra esa dirección y la batería en vivo vuelve a
+  correr de verdad (604/604 en su momento).
+- **La protección de despliegues**: Vercel protegía los alias nuevos con su cartel de inicio de sesión
+  (*Deployment Protection* con SSO). Se desactivó para que la app publicada se abra sin cuenta.
+- **El robot de pruebas**: `.github/workflows/verificar.yml` corre en cada push a `main` y en cada pull
+  request (`npm ci` desde cero → formato → tipos → build → batería completa) y no publica nada.
+
+## Etapa 9: copia de seguridad
+
+Los datos viven solo en este navegador, así que hasta ahora limpiar los datos del sitio —o cambiar de
+equipo— se los llevaba sin aviso. **Ajustes › Datos › Copia de seguridad** ahora los saca y los devuelve
+en un solo archivo:
+
+- **Descargar copia** arma `avispate-AAAA-MM-DD.json` con las claves de `localStorage` (recordatorios,
+  usuarios, categorías, introducción, usuario activo, formato de hora, modo oscuro e historial de avisos)
+  tal cual están, más las fotos y notas de voz de `IndexedDB` convertidas a base64. Al terminar dice
+  cuántos recordatorios y adjuntos salieron y cuánto pesa el archivo.
+- **Restaurar desde archivo** lee el `.json` y, **antes de reemplazar nada**, muestra qué trae («trae 3
+  recordatorios, 2 usuarios, 5 categorías y 1 adjunto») para confirmar o cancelar. Restaurar no recarga
+  la app: se relee lo restaurado y la pantalla lo muestra en el acto.
+- **Lo que no viaja**: las marcas `avispate.sent.*` de «ya avisado», la última visita y el aviso de
+  inactividad son del momento, no del respaldo. Al restaurar, las marcas de «ya avisado» se borran para
+  que lo recuperado pueda volver a avisar.
+- **Un archivo equivocado no toca nada**: si no es JSON, si no es de AVISPATE, si está vacío o si viene
+  de una versión más nueva (`version` mayor que 1), se rechaza con un mensaje claro y los datos quedan
+  como estaban.
+
+El formato y sus comprobaciones viven en `src/lib/copia.ts` —la primera pieza sacada de `App.tsx`— y la
+suite nueva es `tests/e2e-copia.mjs` (23 comprobaciones: descarga, contenido, confirmación, cancelación,
+restauración en pantalla y archivos que no sirven). La app sube a **V1.6** y el pie de Ajustes dice
+`AVISPATE · V1.6 · Etapa 9`.
+
 ## Etapas anteriores y numeración
 
-La app dice **V1.5** desde la entrega de avisos múltiples, notas de voz y cámara. Sobre esa versión se fueron sumando entregas de trabajo que no cambiaban el número:
+La app dijo **V1.5** desde la entrega de avisos múltiples, notas de voz y cámara hasta la Etapa 8. Sobre esa versión se fueron sumando entregas de trabajo que no cambiaban el número; la Etapa 9 —la copia de seguridad, la primera función nueva después de la V1.5— lo sube a **V1.6**:
 
 | Entrega | Qué trajo |
 | --- | --- |
@@ -281,8 +336,12 @@ La app dice **V1.5** desde la entrega de avisos múltiples, notas de voz y cáma
 | Etapa 5 | Deslizar que sí funciona en el teléfono, emoji propio en todas partes, sincronización con Apple Calendar y Outlook, y su revisión de interfaz (logo real de WhatsApp, emoji en burbuja, calendarios plegables y tres líneas en el onboarding) |
 | Etapa 6 | Campana simple de Inicio (la avispa queda solo de mascota), emoji de la rejilla o de la lista completa (hoja a pantalla completa, sin campo de escribir) más foto de usuario (cámara o galería), Mi perfil al mínimo (ícono, nombre y «Editar»), repetir por horas, extensión de país en el WhatsApp, canales por usuario en las dos listas, sincronizar con Calendarios en el onboarding, los tres calendarios en una sola burbuja, categoría preseleccionada, «¿Cuándo te aviso?» con las opciones destacadas y «Ver tips» — más la segunda revisión (lista completa de emojis por temas, vista previa de la foto con ✓ y ✕, la campana fuera de los canales, la extensión de país en bandera con el número a todo lo ancho y la sección de Tips reducida a su botón), el alta de usuarios desde Ajustes, los estados de contacto alineados con su título, la campana de vuelta entre las insignias de cada usuario con las seis en una sola línea, Ajustes ordenado con «Mi perfil» primero, los tres calendarios unidos a su burbuja desplegable con flecha al fondo para cerrarla, y la hoja de emojis y el modal de la foto dibujados en el marco de la app (para que no los encoja ninguna animación), el selector de usuario con su pista (chevron ámbar que gira, sin texto) y las categorías propias (crear con el «+» para el emoji, ordenar arrastrando y eliminar, decidiendo qué pasa con sus recordatorios) |
 | Etapa 7 | El renombre RECUERDA → AVISPATE: la marca en toda la app y en la pestaña del navegador, las claves guardadas renombradas con su migración (recordatorios, usuarios, categorías, ajustes, avisos enviados y contacto intactos) y la copia perezosa de los adjuntos de IndexedDB |
+| Etapa 8 | Publicación en `avispate-app.vercel.app` (sin protección de despliegues), el arreglo de la batería en vivo con `base: "./"` y el robot de GitHub Actions |
+| Etapa 9 | Copia de seguridad: descargar todo en un `.json` —fotos y notas de voz en base64— y restaurarlo desde Ajustes › Datos, con resumen antes de reemplazar |
 
-Si se prefiere numerar cada entrega como versión, el número de hoy sería **V1.6** (una por etapa después de la V1.5); basta cambiar `APP_VERSION` y el título de este archivo. Lo razonable es mantener V1.5 durante la beta privada y subir a **V2.0** cuando llegue el backend con el envío real por WhatsApp y correo.
+Desde la Etapa 9 la app dice **V1.6** (el pie de Ajustes: `AVISPATE · V1.6 · Etapa 9`). Las próximas
+entregas vuelven a numerarse como etapas dentro de la misma versión; lo razonable es subir a **V2.0**
+cuando llegue el backend con el envío real por WhatsApp y correo.
 
 ## Preguntas sobre el permiso de notificaciones y el aviso de inactividad
 
