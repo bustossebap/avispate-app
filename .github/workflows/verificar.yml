@@ -1,0 +1,37 @@
+# El robot de GitHub: instala desde cero, compila y corre las 604 comprobaciones en cada push a main y
+# en cada pull request. No publica nada: `scripts/verificar.sh` solo despliega con `--deploy`, y acá no
+# se pasa, así que este trabajo nunca toca producción (los despliegues los maneja Vercel aparte).
+name: verificar
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Si llegan dos pushes seguidos, el viejo se cancela: lo que importa es el último.
+concurrency:
+  group: verificar-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  bateria:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      # `npm ci` es estricto a propósito: si package-lock.json no coincide con package.json, falla
+      # acá y no en producción.
+      - name: Instalar
+        run: npm ci
+
+      - name: Formato
+        run: npm run format:check
+
+      - name: Tipos, build y batería (604)
+        run: npm run verificar
