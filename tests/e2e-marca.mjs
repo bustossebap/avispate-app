@@ -65,7 +65,8 @@ check(
 )
 check(
   "A · las dos claves históricas de la V1.5 se siguen leyendo para migrar",
-  bundle.includes("recuerda.contacto.v1") && bundle.includes("recuerda.gcal.v1"),
+  bundle.includes("recuerda.contacto.v1") &&
+    bundle.includes("recuerda.gcal.v1"),
 )
 
 // ---------------------------------------------------------------- B) la migración de las claves
@@ -131,7 +132,8 @@ check(
   )
   check(
     "B · la app entra derecho al inicio con los datos migrados",
-    m.txt().includes("¡Avíspate! 🐝") && m.txt().includes("Renovar el registro"),
+    m.txt().includes("¡Avíspate! 🐝") &&
+      m.txt().includes("Renovar el registro"),
     JSON.stringify(m.txt().slice(0, 160)),
   )
   check(

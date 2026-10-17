@@ -42,8 +42,21 @@ export async function cargarBundle({
       throw new Error(ultimo)
     }
     const html = await get(vivo + "/")
-    const jsPath = html.match(/src="(\/assets\/[^"]+\.js)"/)[1]
-    const cssPath = html.match(/href="(\/assets\/[^"]+\.css)"/)[1]
+    // El build usa `base: "./"` (para que dist/ se pueda servir desde cualquier raíz), así que los
+    // assets llegan como `./assets/…` y no como `/assets/…`. Se resuelven contra la dirección para
+    // quedarse con la ruta absoluta, que es la que se le pide al servidor.
+    const ruta = (etiqueta, ext) => {
+      const src = html.match(
+        new RegExp(`${etiqueta}="([^"]*assets/[^"]+\\.${ext})"`),
+      )
+      if (!src)
+        throw new Error(
+          `index.html en vivo sin assets/${ext}: ${html.slice(0, 120)}`,
+        )
+      return new URL(src[1], vivo + "/").pathname
+    }
+    const jsPath = ruta("src", "js")
+    const cssPath = ruta("href", "css")
     const bundle = await get(vivo + jsPath)
     let css = ""
     try {
@@ -90,7 +103,7 @@ export function montar(bundle, seed = {}, opciones = {}) {
     {
       runScripts: "outside-only",
       pretendToBeVisual: true,
-      url: "https://recuerdapapi.vercel.app/",
+      url: "https://avispate-app.vercel.app/",
     },
   )
   const { window } = dom

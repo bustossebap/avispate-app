@@ -2,6 +2,8 @@
 
 Primera transformación del prototipo de Figma Make a una V1 funcional ejecutable como aplicación web local.
 
+**Publicada en <https://avispate-app.vercel.app>**. El enlace anterior, `recuerdapapi.vercel.app`, sigue vivo y sirve la misma versión.
+
 ## Incluye
 
 - Crear recordatorios reales.

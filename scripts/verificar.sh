@@ -6,9 +6,9 @@
 #   3. batería local    node tests/run.mjs       (con LIVE_BASE limpio: nunca pega a producción por error)
 #
 #   — solo con --deploy — (publicar es caro y lento, se hace a pedido y no en cada cambio)
-#   4. despliegue       npx vercel --prod        (alias recuerdapapi.vercel.app)
+#   4. despliegue       npx vercel --prod        (alias avispate-app.vercel.app)
 #   5. bundle en vivo   compara el sha256 del JS publicado con el local
-#   6. batería en vivo  LIVE_BASE=https://recuerdapapi.vercel.app node tests/run.mjs
+#   6. batería en vivo  LIVE_BASE=https://avispate-app.vercel.app node tests/run.mjs
 #
 # Cada paso es secuencial a propósito: construir y probar a la vez hace que la batería lea un dist/ a
 # medio escribir (eso dio fallas fantasma). Los registros quedan en tests/.logs/ (se conservan los últimos).
@@ -18,7 +18,9 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-ALIAS="https://recuerdapapi.vercel.app"
+# La dirección pública de la app. `recuerdapapi.vercel.app` (el nombre anterior) sigue vivo y apunta a
+# la misma entrega, para que los enlaces ya compartidos no se rompan.
+ALIAS="https://avispate-app.vercel.app"
 LOG_DIR="tests/.logs"
 SELLO="$(date +%Y%m%d-%H%M%S)"
 mkdir -p "$LOG_DIR"
