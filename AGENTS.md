@@ -43,7 +43,7 @@ This is the canonical project structure. Start with task-relevant files below. O
 Two rules apply when a task ends (the last reply to the user):
 
 - Run `bash scripts/avisar.sh "<short summary>"` so the user gets a desktop notification (for example
-  `"Etapa 12 lista · 760/760"`). It is a courtesy ping: it must never fail or delay the task.
+  `"Etapa 13 lista · 799/799"`). It is a courtesy ping: it must never fail or delay the task.
 - **Do not deploy to Vercel** (`npm run verificar -- --deploy`, `npx vercel --prod`) unless the user asks
   for it. `npm run verificar` is the default gate and never publishes; publishing is a separate decision.
 

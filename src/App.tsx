@@ -165,9 +165,11 @@ const STORAGE_CATEGORIES = "avispate.categorias.v1"
 // seguridad, que saca y devuelve todo en un .json · 10: los avisos con la app cerrada (push + nube de
 // Supabase) y AVISPATE instalable en el teléfono · 11: la búsqueda en Inicio, posponer desde la
 // notificación y la salud de la cola en Ajustes · 12: la copia que se combina, se deshace y se
-// comparte desde el teléfono, y que avisa cuando hace mucho que no se descarga).
+// comparte desde el teléfono, y que avisa cuando hace mucho que no se descarga · 13: deshacer los
+// borrados —recordatorio, adjunto, categoría y usuario— y ver y liberar el espacio que ocupan los
+// archivos en el dispositivo).
 const APP_VERSION = "V1.9"
-const APP_STAGE = "Etapa 12"
+const APP_STAGE = "Etapa 13"
 // Uso de la app: se guarda la última visita para poder avisar —una sola vez por hueco— cuando alguien
 // vuelve después de una semana o más sin abrir AVISPATE. Es el único aviso que no depende de un
 // recordatorio, así que vive aparte con su propia clave.
@@ -211,6 +213,41 @@ type DeshacerCopia = {
   cuando: string
   datos: Record<string, string>
   enviados: Record<string, string>
+}
+// Etapa 13: deshacer un borrado. Al eliminar un recordatorio, un adjunto, una categoría o un usuario
+// se guarda exactamente lo que salió —con el lugar que ocupaba— y el aviso de abajo ofrece devolverlo
+// durante unos segundos. Los archivos no se borran al eliminar: se sueltan cuando el aviso se va (o los
+// limpia «Liberar espacio» si la app se cerró antes), así «Deshacer» siempre puede devolver la foto.
+const BORRADO_MS = 12000
+type Pieza<T> = { item: T; index: number }
+type Borrado =
+  | { tipo: "recordatorio"; event: Reminder; index: number }
+  | { tipo: "adjunto"; eventId: string; meta: AttachmentMeta; index: number }
+  | {
+      tipo: "categoria"
+      category: Category
+      index: number
+      modo: "borrar" | "soltar"
+      eventos: Pieza<Reminder>[]
+      avisos: Pieza<AppNotification>[]
+      soltados: { id: string; category: string; categoryEmoji: string }[]
+    }
+  | {
+      tipo: "usuario"
+      profile: Profile
+      index: number
+      eraActivo: boolean
+      eventos: Pieza<Reminder>[]
+      avisos: Pieza<AppNotification>[]
+      enviados: [string, string][]
+    }
+// Devuelve los elementos a su lugar. Las piezas traen el índice que tenían antes de salir; se insertan
+// de menor a mayor para que ese índice siga siendo el correcto.
+function reinsertar<T>(lista: T[], piezas: Pieza<T>[]): T[] {
+  const copia = [...lista]
+  for (const pieza of [...piezas].sort((a, b) => a.index - b.index))
+    copia.splice(Math.min(Math.max(pieza.index, 0), copia.length), 0, pieza.item)
+  return copia
 }
 // Las listas que se combinan, cada una con la marca que decide si un elemento ya existe. Las categorías
 // van por nombre porque el nombre ES la clave: dos «Hogar» con emoji distinto son la misma categoría.
@@ -652,6 +689,70 @@ async function deleteAttachment(id: string) {
     })
     db.close()
   } catch {}
+}
+type InventarioAdjuntos = {
+  total: number
+  bytes: number
+  huerfanos: number
+  bytesHuerfanos: number
+  idsHuerfanos: string[]
+}
+// Etapa 13: qué hay guardado en la base de adjuntos y cuánto ocupa, separando lo que ningún
+// recordatorio usa (un archivo que quedó de un borrado o de una copia restaurada). Se recorre con un
+// cursor —no se traen los blobs— y solo se lee el tamaño. Si el navegador no tiene IndexedDB, la
+// promesa falla y Ajustes lo cuenta sin romper la pantalla.
+async function inventarioAdjuntos(
+  referencias: Set<string>,
+): Promise<InventarioAdjuntos> {
+  const db = await openAttachmentDB()
+  try {
+    const archivos = await new Promise<{ id: string; bytes: number }[]>(
+      (resolve, reject) => {
+        const tx = db.transaction(ATTACHMENT_STORE, "readonly")
+        const req = tx.objectStore(ATTACHMENT_STORE).openCursor()
+        const salida: { id: string; bytes: number }[] = []
+        req.onsuccess = () => {
+          const cursor = req.result
+          if (!cursor) {
+            resolve(salida)
+            return
+          }
+          const valor = cursor.value as Blob | undefined
+          salida.push({
+            id: String(cursor.key),
+            bytes: valor && typeof valor.size === "number" ? valor.size : 0,
+          })
+          cursor.continue()
+        }
+        req.onerror = () => reject(req.error)
+      },
+    )
+    const sueltos = archivos.filter((a) => !referencias.has(a.id))
+    const sumar = (lista: { bytes: number }[]) =>
+      lista.reduce((n, a) => n + a.bytes, 0)
+    return {
+      total: archivos.length,
+      bytes: sumar(archivos),
+      huerfanos: sueltos.length,
+      bytesHuerfanos: sumar(sueltos),
+      idsHuerfanos: sueltos.map((a) => a.id),
+    }
+  } finally {
+    db.close()
+  }
+}
+// Lo que ocupan las claves guardadas (recordatorios, usuarios, ajustes): se cuenta en UTF-16, que es
+// como el navegador guarda el texto. Es una aproximación honesta, no la cuota exacta del navegador.
+function tamanoGuardadoLocal(): number {
+  let bytes = 0
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const clave = localStorage.key(i)
+      if (!clave) continue
+      bytes += (clave.length + (localStorage.getItem(clave)?.length ?? 0)) * 2
+    }
+  } catch {}
+  return bytes
 }
 // Copia de seguridad y adjuntos: un .json no puede llevar archivos, así que las fotos y notas de voz
 // viajan como base64. Se convierte por trozos porque un `String.fromCharCode(...bytes)` de un audio de
@@ -5889,7 +5990,7 @@ function DetailScreen({
                 ¿Eliminar este recordatorio?
               </h3>
               <p className="text-stone-400 text-sm mt-1 mb-5">
-                Esta acción no se puede deshacer.
+                Podrás deshacerlo desde el aviso que aparece al eliminarlo.
               </p>
               <div className="flex gap-2">
                 <button
@@ -6361,6 +6462,40 @@ function SettingsScreen({
   } | null>(null)
   const [ocupado, setOcupado] = useState(false)
   const archivoCopia = useRef<HTMLInputElement | null>(null)
+  // Etapa 13: espacio usado. Se mide al abrir Ajustes y cuando cambian los recordatorios, porque los
+  // archivos que deja un borrado pasan a ser «sin usar» apenas se elimina la última referencia.
+  const [espacio, setEspacio] = useState<InventarioAdjuntos | null>(null)
+  const [sinEspacio, setSinEspacio] = useState(false)
+  const [limpiando, setLimpiando] = useState(false)
+  const [avisoEspacio, setAvisoEspacio] = useState<string | null>(null)
+  const medirEspacio = async () => {
+    try {
+      const referencias = new Set(
+        events.flatMap((e) => (e.attachments ?? []).map((a) => a.id)),
+      )
+      setEspacio(await inventarioAdjuntos(referencias))
+      setSinEspacio(false)
+    } catch {
+      setEspacio(null)
+      setSinEspacio(true)
+    }
+  }
+  useEffect(() => {
+    setAvisoEspacio(null)
+    void medirEspacio()
+  }, [events])
+  const liberar = async () => {
+    if (!espacio?.idsHuerfanos.length) return
+    setLimpiando(true)
+    const cuantosArchivos = espacio.huerfanos
+    const bytes = espacio.bytesHuerfanos
+    await Promise.all(espacio.idsHuerfanos.map((id) => deleteAttachment(id)))
+    await medirEspacio()
+    setAvisoEspacio(
+      `Se liberaron ${cuantos(cuantosArchivos, "archivo", "archivos")} (${formatFileSize(bytes)}).`,
+    )
+    setLimpiando(false)
+  }
   const descargar = async () => {
     setOcupado(true)
     setPendiente(null)
@@ -7606,6 +7741,64 @@ function SettingsScreen({
           <p className="text-[12px] text-stone-400 mt-1">
             Se almacenan localmente en este navegador.
           </p>
+          {/* Etapa 13: cuánto ocupa lo guardado. Los archivos viven en IndexedDB y el texto en
+              localStorage; lo que ningún recordatorio usa se puede liberar sin tocar nada más. */}
+          <div className="mt-4 pt-4 border-t border-stone-100 dark:border-stone-800">
+            <p className="text-[13px] font-semibold text-stone-700 dark:text-stone-200">
+              Espacio en este dispositivo
+            </p>
+            <p className="text-[12px] text-stone-400 mt-1">
+              Textos y ajustes: {formatFileSize(tamanoGuardadoLocal())}.
+            </p>
+            {sinEspacio ? (
+              <p className="text-[12px] text-stone-400">
+                Este navegador no deja revisar los archivos guardados.
+              </p>
+            ) : (
+              <>
+                <p className="text-[12px] text-stone-400">
+                  {espacio
+                    ? espacio.total
+                      ? `${cuantos(espacio.total, "archivo", "archivos")} entre fotos y notas de voz: ${formatFileSize(espacio.bytes)}.`
+                      : "Sin fotos ni notas de voz guardadas."
+                    : "Revisando los archivos…"}
+                </p>
+                {espacio && (
+                  <p
+                    className={`text-[11px] mt-1 ${
+                      espacio.huerfanos
+                        ? "text-amber-700 dark:text-amber-300 font-medium"
+                        : "text-stone-400"
+                    }`}
+                  >
+                    {espacio.huerfanos
+                      ? `${cuantos(espacio.huerfanos, "archivo", "archivos")} sin usar (${formatFileSize(espacio.bytesHuerfanos)}).`
+                      : "Todo lo guardado lo usa algún recordatorio."}
+                  </p>
+                )}
+                {espacio && espacio.huerfanos > 0 && (
+                  <button
+                    type="button"
+                    onClick={liberar}
+                    disabled={limpiando}
+                    className="mt-2 px-3 py-2 rounded-xl bg-stone-100 dark:bg-stone-800 text-stone-700 dark:text-stone-200 text-[12px] font-bold disabled:opacity-50"
+                  >
+                    {limpiando
+                      ? "Liberando…"
+                      : `Liberar ${formatFileSize(espacio.bytesHuerfanos)}`}
+                  </button>
+                )}
+              </>
+            )}
+            {avisoEspacio && (
+              <p
+                role="status"
+                className="mt-2 text-[12px] text-emerald-600 dark:text-emerald-400"
+              >
+                {avisoEspacio}
+              </p>
+            )}
+          </div>
           {/* Etapa 9 y 12: la copia de seguridad. Descargar (o compartir) deja un .json con todo;
               restaurar lo devuelve después de mostrar qué trae y de elegir si se suma a lo que hay o
               si lo reemplaza. Y siempre se puede volver a como estaba antes de la última restauración. */}
@@ -8043,6 +8236,21 @@ export default function App() {
   // pintar el botón, con los datos completos incluidos para no volver a leerlos.
   const [ultimaCopia, setUltimaCopia] = useState<UltimaCopia | null>(loadUltimaCopia)
   const [deshacer, setDeshacer] = useState<DeshacerCopia | null>(loadDeshacer)
+  // Etapa 13: el aviso de «Deshacer» que sigue a un borrado. Hay uno a la vez: el siguiente reemplaza
+  // al anterior (que ya no tiene vuelta y suelta sus archivos) y el temporizador lo cierra solo. El
+  // `ref` es la copia que leen el temporizador y el botón sin esperar a un render.
+  const [borrado, setBorrado] = useState<{
+    texto: string
+    datos: Borrado
+  } | null>(null)
+  const borradoRef = useRef<{ texto: string; datos: Borrado } | null>(null)
+  const borradoTimer = useRef<number | null>(null)
+  // Los archivos que se sueltan al vencer el aviso se revisan contra los recordatorios VIVOS: si algo
+  // se deshizo (o se volvió a guardar), su adjunto se queda.
+  const eventsRef = useRef(events)
+  useEffect(() => {
+    eventsRef.current = events
+  }, [events])
   // Relevo al cerrar el onboarding: mientras la abeja se despide y el velo se desvanece, el
   // inicio de la app se revela saliendo del desenfoque (ver BeeHandoff). El temporizador lo apaga.
   const [handoff, setHandoff] = useState(false)
@@ -8077,6 +8285,7 @@ export default function App() {
   useEffect(
     () => () => {
       if (handoffTimer.current) window.clearTimeout(handoffTimer.current)
+      if (borradoTimer.current) window.clearTimeout(borradoTimer.current)
     },
     [],
   )
@@ -8129,9 +8338,110 @@ export default function App() {
     localStorage.setItem(STORAGE_CATEGORIES, JSON.stringify(categories))
   }, [categories])
 
+  // Etapa 13: el aviso de «Deshacer». Un borrado nuevo reemplaza al anterior —que ya no tiene
+  // vuelta— y suelta sus archivos; al vencer el tiempo pasa lo mismo con el último, salvo que algún
+  // recordatorio los siga usando. Los blobs no se borran al eliminar: se guardan hasta acá.
+  const archivosDe = (d: Borrado): string[] => {
+    const deEventos = (piezas: Pieza<Reminder>[]) =>
+      piezas.flatMap(({ item }) => (item.attachments ?? []).map((a) => a.id))
+    if (d.tipo === "recordatorio")
+      return (d.event.attachments ?? []).map((a) => a.id)
+    if (d.tipo === "adjunto") return [d.meta.id]
+    return deEventos(d.eventos)
+  }
+  const soltarArchivos = (d: Borrado) => {
+    const vivos = new Set(
+      eventsRef.current.flatMap((e) => (e.attachments ?? []).map((a) => a.id)),
+    )
+    archivosDe(d)
+      .filter((id) => !vivos.has(id))
+      .forEach((id) => void deleteAttachment(id))
+  }
+  const cerrarBorrado = () => {
+    if (borradoTimer.current) {
+      window.clearTimeout(borradoTimer.current)
+      borradoTimer.current = null
+    }
+    borradoRef.current = null
+    setBorrado(null)
+  }
+  const ofrecerDeshacer = (texto: string, datos: Borrado) => {
+    const previo = borradoRef.current
+    if (previo) soltarArchivos(previo.datos)
+    if (borradoTimer.current) window.clearTimeout(borradoTimer.current)
+    const nuevo = { texto, datos }
+    borradoRef.current = nuevo
+    setBorrado(nuevo)
+    borradoTimer.current = window.setTimeout(() => {
+      const actual = borradoRef.current
+      if (actual && actual.datos === datos) {
+        borradoRef.current = null
+        setBorrado(null)
+        soltarArchivos(datos)
+      }
+      borradoTimer.current = null
+    }, BORRADO_MS)
+  }
+  const deshacerBorrado = () => {
+    const actual = borradoRef.current
+    if (!actual) return
+    cerrarBorrado()
+    const d = actual.datos
+    if (d.tipo === "recordatorio") {
+      setEvents((prev) => reinsertar(prev, [{ item: d.event, index: d.index }]))
+    } else if (d.tipo === "adjunto") {
+      setEvents((prev) =>
+        prev.map((e) =>
+          e.id === d.eventId
+            ? {
+                ...e,
+                attachments: reinsertar(e.attachments ?? [], [
+                  { item: d.meta, index: d.index },
+                ]),
+              }
+            : e,
+        ),
+      )
+    } else if (d.tipo === "categoria") {
+      setCategories((prev) =>
+        reinsertar(prev, [{ item: d.category, index: d.index }]),
+      )
+      if (d.modo === "borrar") {
+        setEvents((prev) => reinsertar(prev, d.eventos))
+        setNotifications((prev) => reinsertar(prev, d.avisos))
+      } else {
+        setEvents((prev) =>
+          prev.map((e) => {
+            const vuelta = d.soltados.find((s) => s.id === e.id)
+            return vuelta
+              ? {
+                  ...e,
+                  category: vuelta.category,
+                  categoryEmoji: vuelta.categoryEmoji,
+                }
+              : e
+          }),
+        )
+      }
+    } else {
+      setProfiles((prev) =>
+        reinsertar(prev, [{ item: d.profile, index: d.index }]),
+      )
+      setEvents((prev) => reinsertar(prev, d.eventos))
+      setNotifications((prev) => reinsertar(prev, d.avisos))
+      for (const [clave, valor] of d.enviados) {
+        try {
+          localStorage.setItem(clave, valor)
+        } catch {}
+      }
+      if (d.eraActivo) setActiveProfileId(d.profile.id)
+    }
+  }
+
   // Categorías: agregar (sin repetir el nombre, sin distinguir mayúsculas), mover una posición y
-  // eliminar. Al eliminar se decide qué pasa con sus recordatorios: se borran con ella (y con sus
-  // adjuntos) o se quedan sin categoría, así dejan de aparecer en el carrusel y se ven sólo en «Todas».
+  // eliminar. Al eliminar se decide qué pasa con sus recordatorios: se borran con ella o se quedan
+  // sin categoría, así dejan de aparecer en el carrusel y se ven sólo en «Todas». Las dos salidas se
+  // pueden deshacer: se guarda la categoría, su lugar y lo que salió con ella.
   const addCategory = (name: string, emoji: string) => {
     const limpio = name.trim()
     if (!limpio) return
@@ -8152,14 +8462,21 @@ export default function App() {
     })
   }
   const removeCategory = (name: string, queHacer: "borrar" | "soltar") => {
+    const index = categories.findIndex((c) => c.name === name)
+    if (index < 0) return
+    const category = categories[index]
+    const condenados = events
+      .map((item, i) => ({ item, index: i }))
+      .filter(({ item }) => item.category === name)
+    const ids = new Set(condenados.map(({ item }) => item.id))
+    const avisos = notifications
+      .map((item, i) => ({ item, index: i }))
+      .filter(({ item }) => item.eventId && ids.has(item.eventId))
     if (queHacer === "borrar") {
-      const condenados = events.filter((e) => e.category === name)
-      condenados.forEach((e) =>
-        (e.attachments ?? []).forEach((a) => deleteAttachment(a.id)),
-      )
-      const ids = new Set(condenados.map((e) => e.id))
       setEvents((prev) => prev.filter((e) => e.category !== name))
-      setNotifications((prev) => prev.filter((n) => !n.eventId || !ids.has(n.eventId)))
+      setNotifications((prev) =>
+        prev.filter((n) => !n.eventId || !ids.has(n.eventId)),
+      )
       if (selectedId && ids.has(selectedId)) {
         setSelectedId(null)
         setScreen(tab as Screen)
@@ -8172,6 +8489,28 @@ export default function App() {
       )
     }
     setCategories((prev) => prev.filter((c) => c.name !== name))
+    ofrecerDeshacer(
+      queHacer === "borrar" && condenados.length
+        ? `Categoría «${name}» eliminada con ${cuantos(
+            condenados.length,
+            "recordatorio",
+            "recordatorios",
+          )}`
+        : `Categoría «${name}» eliminada`,
+      {
+        tipo: "categoria",
+        category,
+        index,
+        modo: queHacer,
+        eventos: queHacer === "borrar" ? condenados : [],
+        avisos: queHacer === "borrar" ? avisos : [],
+        soltados: condenados.map(({ item }) => ({
+          id: item.id,
+          category: item.category,
+          categoryEmoji: item.categoryEmoji,
+        })),
+      },
+    )
   }
 
   const selected = events.find((e) => e.id === selectedId)
@@ -8266,15 +8605,26 @@ export default function App() {
   }
   const deleteEvent = () => {
     if (!selectedId) return
-    const old = events.find((e) => e.id === selectedId)
-    ;(old?.attachments ?? []).forEach((a) => deleteAttachment(a.id))
+    const index = events.findIndex((e) => e.id === selectedId)
+    const old = events[index]
+    if (!old) return
     setEvents((prev) => prev.filter((e) => e.id !== selectedId))
     setSelectedId(null)
     setScreen(tab as Screen)
+    // El archivo no se borra acá: si se deshace, la foto o la nota de voz vuelven con el recordatorio.
+    ofrecerDeshacer(`«${old.name}» eliminado`, {
+      tipo: "recordatorio",
+      event: old,
+      index,
+    })
   }
   const removeAttachment = (attachmentId: string) => {
     if (!selectedId) return
-    deleteAttachment(attachmentId)
+    const event = events.find((e) => e.id === selectedId)
+    if (!event) return
+    const index = (event.attachments ?? []).findIndex((a) => a.id === attachmentId)
+    const meta = (event.attachments ?? [])[index]
+    if (!meta) return
     setEvents((prev) =>
       prev.map((e) =>
         e.id === selectedId
@@ -8287,6 +8637,12 @@ export default function App() {
           : e,
       ),
     )
+    ofrecerDeshacer(`Adjunto quitado de «${event.name}»`, {
+      tipo: "adjunto",
+      eventId: event.id,
+      meta,
+      index,
+    })
   }
   const completeEvent = () => {
     if (!selectedId) return
@@ -8604,28 +8960,63 @@ export default function App() {
   const selectProfile = (id: string) => {
     setActiveProfileId(id)
   }
-  // Eliminar un usuario borra lo suyo en este dispositivo: sus recordatorios (con sus archivos y sus
-  // marcas de "ya enviado"), sus avisos del historial y el perfil mismo, que es donde viven su
-  // contacto, sus canales y su Google Calendar. Si el borrado era el activo, pasa el mando a otro.
+  // Eliminar un usuario borra lo suyo en este dispositivo: sus recordatorios, sus marcas de «ya
+  // enviado», sus avisos del historial y el perfil mismo, que es donde viven su contacto, sus canales
+  // y su Google Calendar. Si el borrado era el activo, pasa el mando a otro. Todo eso se puede
+  // deshacer mientras el aviso siga a la vista (Etapa 13): vuelven el perfil, su lugar en la lista,
+  // sus recordatorios, su historial y sus marcas.
   const deleteProfile = (id: string) => {
     if (profiles.length <= 1) return
-    const doomed = events.filter((e) => ownerOfId(e.ownerId) === id)
-    doomed.forEach((e) =>
-      (e.attachments ?? []).forEach((a) => deleteAttachment(a.id)),
-    )
-    doomed.forEach((e) =>
-      Object.keys(localStorage).forEach((k) => {
-        if (k.startsWith(SENT_PREFIX) && k.includes(`${e.id}:`))
-          localStorage.removeItem(k)
-      }),
-    )
+    const index = profiles.findIndex((p) => p.id === id)
+    const profile = profiles[index]
+    if (!profile) return
+    const eraActivo = activeProfile.id === id
+    const condenados = events
+      .map((item, i) => ({ item, index: i }))
+      .filter(({ item }) => ownerOfId(item.ownerId) === id)
+    const avisos = notifications
+      .map((item, i) => ({ item, index: i }))
+      .filter(({ item }) => ownerOfId(item.ownerId) === id)
+    const enviados: [string, string][] = []
+    const clavesEnviadas: string[] = []
+    for (const { item } of condenados) {
+      for (let i = 0; i < localStorage.length; i++) {
+        const clave = localStorage.key(i)
+        if (clave?.startsWith(SENT_PREFIX) && clave.includes(`${item.id}:`)) {
+          const valor = localStorage.getItem(clave)
+          if (valor !== null) {
+            enviados.push([clave, valor])
+            clavesEnviadas.push(clave)
+          }
+        }
+      }
+    }
+    clavesEnviadas.forEach((clave) => localStorage.removeItem(clave))
     setEvents((prev) => prev.filter((e) => ownerOfId(e.ownerId) !== id))
     setNotifications((prev) => prev.filter((n) => ownerOfId(n.ownerId) !== id))
     setProfiles((prev) => prev.filter((p) => p.id !== id))
-    if (activeProfile.id === id) {
+    if (eraActivo) {
       const next = profiles.find((p) => p.id !== id)
       if (next) setActiveProfileId(next.id)
     }
+    ofrecerDeshacer(
+      condenados.length
+        ? `Usuario «${profile.name}» eliminado con ${cuantos(
+            condenados.length,
+            "recordatorio",
+            "recordatorios",
+          )}`
+        : `Usuario «${profile.name}» eliminado`,
+      {
+        tipo: "usuario",
+        profile,
+        index,
+        eraActivo,
+        eventos: condenados,
+        avisos,
+        enviados,
+      },
+    )
   }
   const replayOnboarding = () => {
     localStorage.removeItem(STORAGE_ONBOARDING)
@@ -8943,6 +9334,26 @@ export default function App() {
                 setScreen("create")
               }}
             />
+          </div>
+        )}
+        {/* Etapa 13: el aviso que hace que borrar no dé miedo. Vive sobre la barra inferior y se va
+            solo; «Deshacer» devuelve exactamente lo que salió, con su lugar y sus archivos. */}
+        {borrado && (
+          <div
+            role="status"
+            aria-live="polite"
+            className="absolute left-3 right-3 bottom-32 z-40 flex items-center gap-3 rounded-2xl bg-stone-900/95 dark:bg-stone-100/95 px-4 py-3 shadow-lg"
+          >
+            <span className="flex-1 text-[12px] font-semibold leading-snug text-white dark:text-stone-900">
+              {borrado.texto}
+            </span>
+            <button
+              type="button"
+              onClick={deshacerBorrado}
+              className="flex-shrink-0 rounded-full bg-amber-500 text-white text-[12px] font-bold px-3 py-1.5"
+            >
+              Deshacer
+            </button>
           </div>
         )}
         {versionNueva && (

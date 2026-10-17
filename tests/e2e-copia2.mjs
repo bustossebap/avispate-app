@@ -387,7 +387,7 @@ check(
 )
 check(
   "G · el pie de Ajustes ya es el de esta entrega",
-  m.txt().includes("AVISPATE · V1.9 · Etapa 12"),
+  m.txt().includes("AVISPATE · V1.9 · Etapa 13"),
   m.txt().slice(-60),
 )
 

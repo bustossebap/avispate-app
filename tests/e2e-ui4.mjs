@@ -565,7 +565,9 @@ const seedApp = (extra) => ({
   )
   check(
     "D1 · y su fila desaparece de Ajustes",
-    !m.rowOf("Empresa") && !m.txt().includes("Empresa"),
+    ![...m.doc.querySelectorAll("#root p")].some(
+      (p) => (p.textContent || "").trim() === "Empresa",
+    ),
     JSON.stringify(m.txt().slice(0, 200)),
   )
   check(
@@ -590,7 +592,10 @@ const seedApp = (extra) => ({
   await wait(80)
   check(
     "D2 · borrar el usuario activo lo elimina de la lista",
-    m.profileOf("yo") === undefined && !m.rowOf("Yo"),
+    m.profileOf("yo") === undefined &&
+      ![...m.doc.querySelectorAll("#root p")].some(
+        (p) => (p.textContent || "").trim() === "Yo",
+      ),
     JSON.stringify((m.storage("avispate.profiles.v1") || []).map((p) => p.id)),
   )
   check(

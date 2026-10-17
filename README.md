@@ -1,4 +1,4 @@
-# AVISPATE — V1.9 (Etapa 12)
+# AVISPATE — V1.9 (Etapa 13)
 
 Primera transformación del prototipo de Figma Make a una V1 funcional ejecutable como aplicación web local.
 
@@ -32,6 +32,8 @@ Primera transformación del prototipo de Figma Make a una V1 funcional ejecutabl
 - Búsqueda en Inicio: la lupa filtra por nombre, nota o categoría, sin exigir tildes ni mayúsculas y respetando la categoría elegida.
 - Posponer desde la notificación: «Posponer 10 min» o «Posponer 1 hora» mueve el aviso en la nube sin abrir la app.
 - Salud de la cola (Ajustes): cuántos avisos hay en este teléfono, qué tiene la nube y cuándo se subió por última vez, con «Revisar ahora».
+- Deshacer cualquier borrado: recordatorios, adjuntos, categorías (en sus dos salidas) y usuarios completos, desde el aviso que aparece abajo.
+- Espacio en el dispositivo (Ajustes): cuánto ocupan los textos, las fotos y las notas de voz, y un botón para liberar los archivos que ya no usa ningún recordatorio.
 
 ## Ejecutar
 
@@ -75,7 +77,7 @@ IP de la red.
 
 La batería E2E vive **dentro del proyecto** (`tests/`): monta el bundle real dentro de jsdom y recorre la
 app como si alguien la tocara —onboarding, crear y editar recordatorios, calendarios, archivos, usuarios,
-Ajustes, tips—. Son **11 suites y 760 comprobaciones**.
+borrar y deshacer, Ajustes, tips—. Son **12 suites y 799 comprobaciones**.
 
 ```bash
 npm run build        # la batería prueba dist/: si está viejo, se avisa y no corre
@@ -89,7 +91,7 @@ Cada push a `main` y cada pull request pasan además por el robot de GitHub
 (el despliegue es cosa de Vercel). El resultado se ve en la pestaña *Actions* del repositorio.
 
 - `tests/harness.mjs` - el montaje jsdom y todas las ayudas (`montar`, `wait`, `byLabel`, `swipe`,
-  `storage`, `reporter`…). Un arreglo se hace **una vez** y vale para las once suites.
+  `storage`, `reporter`…). Un arreglo se hace **una vez** y vale para las doce suites.
 - `tests/e2e-*.mjs` - una suite por entrega. Cada una declara sus comprobaciones con `check(...)` y
   cierra con `process.exit(finish() ? 1 : 0)`.
 - `tests/run.mjs` - el runner: corre las suites en orden, resume `OK/FALLA` por suite y **falla si `dist/`
@@ -430,6 +432,39 @@ La lógica pura vive en `src/lib/copia.ts` (`combinarDatos`, `haceCuanto`) y la 
 avisado», la fecha del último respaldo, el aviso de los 30 días, compartir y cancelar). La batería pasa
 de 730 a **760**. La app sube a **V1.9** y el pie de Ajustes dice `AVISPATE · V1.9 · Etapa 12`.
 
+## Etapa 13: borrar sin miedo
+
+Hasta acá, eliminar era la única acción sin vuelta: un toque de más en «Eliminar recordatorio» se
+llevaba la nota, la categoría y los archivos, y borrar un usuario se llevaba todo lo suyo sin preguntar
+dos veces. Esta entrega hace que el borrado se pueda deshacer y que el espacio guardado se pueda ver:
+
+- **Un aviso con «Deshacer».** Al eliminar un recordatorio aparece abajo, sobre la barra, ««Pagar la
+  luz» eliminado» con un botón «Deshacer» que lo devuelve con su id, su lugar en la lista, su nota, su
+  categoría y sus adjuntos. El aviso se va solo a los 12 segundos; uno nuevo reemplaza al anterior (el
+  que ya no tiene vuelta suelta sus archivos), y una persona que usa lector de pantalla lo escucha.
+- **También los adjuntos.** Quitar una foto o una nota de voz desde el detalle ya no es definitivo:
+  «Adjunto quitado de «…»» lo devuelve en su misma posición dentro del recordatorio.
+- **Categorías, en sus dos salidas.** Si al eliminar una categoría se eligen «Dejarlos sin categoría»,
+  deshacer devuelve la categoría a su lugar en el carrusel y a cada recordatorio su categoría y su
+  emoji. Si se eligen «Borrar sus recordatorios», vuelven la categoría, sus recordatorios y sus avisos
+  del historial, en el mismo orden.
+- **Usuarios completos.** Borrar un usuario se lleva su perfil, sus recordatorios, sus avisos, sus
+  marcas de «ya avisado» y —si era el activo— el mando. Deshacer lo devuelve todo: el perfil en su
+  lugar, los recordatorios en el suyo, el historial y las marcas, y el mando si lo tenía.
+- **Los archivos no se borran al borrar.** La foto o la nota de voz siguen en IndexedDB hasta que el
+  aviso se va; recién ahí se sueltan, y solo si ningún recordatorio vivo las sigue usando. Así
+  «Deshacer» funciona siempre, incluso si la app se había quedado sin red o sin IndexedDB.
+- **Espacio en este dispositivo.** Ajustes › Datos suma una tarjeta que dice cuánto ocupan los textos
+  (UTF-16, como los guarda el navegador) y cuántos archivos hay entre fotos y notas de voz, con su
+  tamaño. Si alguno no lo usa ningún recordatorio —un borrado cuya app se cerró antes del aviso, o una
+  copia restaurada—, lo marca y ofrece «Liberar X»; si no hay IndexedDB, lo dice sin romper la pantalla.
+
+La lógica vive en `src/App.tsx` (`Borrado`, `reinsertar`, `ofrecerDeshacer`, `deshacerBorrado`,
+`inventarioAdjuntos`); no hay claves nuevas: el aviso es del momento y no se guarda. La suite nueva es
+`tests/e2e-borrar.mjs` (39 comprobaciones: el aviso y su reemplazo, las cuatro clases de borrado con su
+deshacer, el orden y los archivos, y la tarjeta de espacio). La batería pasa de 760 a **799**. La app
+sigue en **V1.9** y el pie de Ajustes dice `AVISPATE · V1.9 · Etapa 13`.
+
 ## Etapas anteriores y numeración
 
 La app dijo **V1.5** desde la entrega de avisos múltiples, notas de voz y cámara hasta la Etapa 8. Sobre esa versión se fueron sumando entregas de trabajo que no cambiaban el número; la Etapa 9 —la copia de seguridad, la primera función nueva después de la V1.5— lo sube a **V1.6**:
@@ -449,10 +484,202 @@ La app dijo **V1.5** desde la entrega de avisos múltiples, notas de voz y cáma
 | Etapa 10 | Avisos con la app cerrada (cola calculada en el teléfono + Supabase + cron + Edge Function), AVISPATE instalable con service worker propio y píldora de versión nueva |
 | Etapa 11 | Búsqueda en Inicio (sin tildes, por nombre, nota o categoría), posponer desde la notificación y salud de la cola en Ajustes |
 | Etapa 12 | Copia de seguridad que se suma a lo que hay o reemplaza todo, «Volver a como estaba», compartir por el menú del teléfono y recordatorio de la última copia a los 30 días |
+| Etapa 13 | Deshacer los borrados (recordatorio, adjunto, categoría y usuario completo) y ver y liberar el espacio que ocupan los archivos en el dispositivo |
 
-Desde la Etapa 12 la app dice **V1.9** (el pie de Ajustes: `AVISPATE · V1.9 · Etapa 12`). Las próximas
-entregas vuelven a numerarse como etapas dentro de la misma versión; lo razonable es subir a **V2.0**
-cuando llegue el envío real por WhatsApp y correo.
+Desde la Etapa 12 la app dice **V1.9** (el pie de Ajustes: `AVISPATE · V1.9 · Etapa 13`). La Etapa 13
+no cambia el número; lo razonable es subir a **V2.0** cuando llegue el envío real por WhatsApp y correo.
+
+## Roadmap: de la V1.9 a la V3.1
+
+Esto es un plan, no una promesa: los esfuerzos son semanas de una persona y se ajustan al ritmo real. El
+orden no es casual. Primero se cierra lo que hoy es una simulación (WhatsApp y correo); después se
+resuelve la cuenta, porque sin cuenta no hay sincronización ni colaboración; recién con esa base estable
+se conectan los calendarios y las listas compartidas. Al final se pule la captura, la accesibilidad y la
+operación, y la app se empaqueta para las tiendas. La regla de oro no cambia: **sin nube configurada
+AVISPATE sigue funcionando sola**, y ninguna entrega se publica sin `npm run verificar` en verde y su
+suite nueva.
+
+| Etapa | Versión | Qué agrega | Esfuerzo |
+| --- | --- | --- | --- |
+| 14 | V2.0 | Envío real por WhatsApp y correo, con estado de cada aviso | 3–4 semanas |
+| 15 | V2.1 | Cuenta y sincronización entre teléfonos | 6–8 semanas |
+| 16 | V2.2 | Calendarios de ida y vuelta (Google, Outlook, Apple) | 4–6 semanas |
+| 17 | V2.3 | Listas y espacios compartidos | 4–6 semanas |
+| 18 | V2.4 | Captura rápida, plantillas y edición en lote | 2–3 semanas |
+| 19 | V2.5 | Accesibilidad AA e idiomas | 2–3 semanas |
+| 20 | V2.6 | Operación, datos y confianza | 3–4 semanas |
+| 21 | V3.0 | Apps nativas iOS y Android | 5–7 semanas |
+| 22 | V3.1 | Lanzamiento público y soporte | 2–3 semanas |
+
+En total, entre **31 y 44 semanas** de trabajo de una persona, sin contar los tiempos de revisión de las
+tiendas. Las etapas 18 y 19 pueden correr en paralelo con la 16 o la 17 si hay más de una persona; las
+demás tienen dependencias duras y no conviene adelantarlas.
+
+**Reglas que no cambian en ninguna etapa.** Cada etapa trae su suite en `tests/`, su entrada en este
+README y el pie de Ajustes actualizado; las migraciones de datos se prueban con archivos de la versión
+anterior y nunca rompen una copia de seguridad; los secretos viven en Supabase, jamás en el bundle; y
+publicar sigue siendo un paso aparte (`npm run verificar -- --deploy`) que se hace solo cuando se pide.
+
+### Etapa 14 · Entrega real por WhatsApp y correo (V2.0)
+
+**Objetivo:** que un recordatorio llegue de verdad a un teléfono o a un correo, con la app cerrada, y
+que se sepa qué pasó con cada envío. Hoy el canal existe en la interfaz y en la cola, pero el envío real
+es el pendiente más grande del producto.
+
+- WhatsApp por la **Cloud API de Meta**, con plantillas de utilidad aprobadas (nombre, título, fecha,
+  categoría) y el enlace `wa.me` como respaldo cuando no hay plantilla o la persona prefiere mandarlo a
+  mano. Verificación del número y consentimiento explícito por usuario; baja y “no molestar” por canal.
+- Correo por un proveedor transaccional (Resend o SES) con dominio propio, SPF, DKIM y DMARC, y manejo
+  de rebotes y quejas.
+- Tabla `envios` con estado (`en cola`, `enviado`, `entregado`, `falló`), clave de idempotencia, reintentos
+  con espera creciente, tope diario por usuario y el último error explicado en Ajustes › Avisos.
+- Plantillas en español, horas de silencio y zona horaria por usuario; texto plano como respaldo.
+- Webhooks del proveedor para actualizar estados, sin exponer secretos al cliente.
+
+**Terminada cuando:** un recordatorio real llega a un WhatsApp y a un correo con la app cerrada; el
+estado se ve en Ajustes y en el historial; un fallo se reintenta y se explica; la suite corre contra el
+sandbox de los proveedores y hay una prueba manual documentada. `supabase/README.md` explica el alta.
+
+### Etapa 15 · Cuenta y sincronización entre teléfonos (V2.1)
+
+**Objetivo:** que la misma persona vea lo mismo en el teléfono y en la computadora, y que cambiar de
+teléfono no dependa de acordarse de descargar una copia. Es la etapa más grande y la que habilita el
+resto.
+
+- **Supabase Auth** con enlace mágico por correo (y Google/Apple más adelante). El modo invitado sigue
+  existiendo: al crear la cuenta se ofrece «reclamar este teléfono», que sube lo que ya hay sin duplicar.
+- Esquema en la nube con `user_id` en recordatorios, categorías, perfiles, avisos, ajustes y marcas, con
+  **RLS por usuario** y pruebas negativas (un usuario no puede leer ni escribir lo ajeno).
+- Adjuntos en Supabase Storage, con límites de tamaño, URLs firmadas y limpieza al borrar.
+- Motor de sincronización: cola de salida por dispositivo, cursor de bajada, Realtime para lo urgente y
+  resolución de conflictos por campo (`updatedAt` + tumbas para los borrados, desempate determinista).
+  La Etapa 13 ayuda: un borrado ya puede viajar como tumba sin perder el «Deshacer» local.
+- Lista de dispositivos con última conexión y botón para cerrar sesión en uno o en todos; al salir se
+  puede conservar o borrar la copia local.
+
+**Terminada cuando:** dos dispositivos convergen en segundos después de reconectar; editar sin red en
+los dos no duplica ni pierde nada; cerrar sesión y volver a entrar deja todo igual; las pruebas de RLS
+fallan como deben; y una cuenta nueva se puede crear desde una copia de la Etapa 13 sin perder datos.
+
+### Etapa 16 · Calendarios de ida y vuelta (V2.2)
+
+**Objetivo:** que un cambio hecho en AVISPATE aparezca solo en el calendario y al revés, sin bajar
+archivos ni volver a cargar el evento a mano.
+
+- Google con OAuth (PKCE) y Calendar API; Outlook con Microsoft Graph; Apple con CalDAV y contraseña de
+  aplicación, o —como mínimo— una suscripción `webcal://` firmada por usuario. Los tokens se guardan
+  cifrados en el servidor y se pueden revocar desde Ajustes.
+- Cada ocurrencia se enlaza con su evento externo (`calendar_id` + `event_id`): crear, editar, completar
+  y borrar se propagan en los dos sentidos. Los eventos externos que no son de AVISPATE se muestran, pero
+  no se tocan.
+- Sincronización con webhooks donde existan y sondeo donde no; «Sincronizar ahora» queda como botón de
+  emergencia y el `.ics` sigue disponible para exportar.
+- Política de conflictos explícita (gana el último cambio, con aviso cuando se pisa una edición ajena) y
+  estado de la última sincronización por calendario.
+
+**Terminada cuando:** crear, editar y borrar dan la vuelta completa en Google y en Outlook; un token
+revocado desconecta sin romper nada; dos ciclos seguidos no duplican eventos; y hay suite con proveedores
+simulados más una lista de verificación manual con cuentas reales.
+
+### Etapa 17 · Listas y espacios compartidos (V2.3)
+
+**Objetivo:** que dos o más personas puedan llevar juntas una lista —la casa, el trabajo, el club— sin
+mandarse capturas por chat.
+
+- Espacios con roles (dueño, administrador, miembro) e invitación por enlace, correo o teléfono.
+- Se comparte una categoría o una lista completa; cada recordatorio puede asignarse a una persona, con
+  comentarios y un registro de actividad («Ana completó “Pagar la luz”»).
+- Avisos de cambios para los miembros, silenciables por espacio; salir de un espacio, quitar a alguien y
+  transferir la propiedad.
+- Todo el permiso se aplica en el servidor (RLS y funciones), no en la interfaz: la app solo muestra lo
+  que la política ya permite.
+
+**Terminada cuando:** dos cuentas ven la misma lista en tiempo real; un miembro sin permiso no puede
+leer ni borrar lo ajeno (probado en negativo); al quitar a alguien sus registros históricos se conservan;
+y cada espacio tiene su registro de actividad.
+
+### Etapa 18 · Captura rápida, plantillas y edición en lote (V2.4)
+
+**Objetivo:** cargar un recordatorio en menos de cinco segundos y tocar menos cuando hay varios.
+
+- Frases en español en el campo rápido: «mañana 9», «cada 2 semanas», «el último viernes», «todos los
+  lunes y jueves», con vista previa de lo que entendió y opción de corregir.
+- Plantillas propias («Pagar servicios», «Control médico») y duplicar un recordatorio con o sin historial.
+- Selección múltiple para completar, mover de categoría, posponer o borrar en lote, con el mismo
+  «Deshacer» de la Etapa 13.
+- Posponer desde la app (no solo desde la notificación), atajos de la PWA y «Compartir hacia AVISPATE»
+  como destino del menú del teléfono.
+
+**Terminada cuando:** las frases más comunes se interpretan bien en la suite; las acciones en lote se
+deshacen completas; compartir algo desde otra app abre AVISPATE con el texto cargado; y nada de esto
+rompe el modo sin conexión.
+
+
+### Etapa 19 · Accesibilidad AA e idiomas (V2.5)
+
+**Objetivo:** que AVISPATE se pueda usar con lector de pantalla, con teclado, con poco contraste o con el
+texto al 200 %, y que deje de estar atada al español.
+
+- Auditoría WCAG 2.2 AA: foco que entra y vuelve de los modales, etiquetas y nombres accesibles, contraste,
+  blancos de 44 px, movimiento reducido, zoom de texto y navegación completa por teclado.
+- Prueba con VoiceOver y TalkBack en los flujos principales (alta, completar, borrar y deshacer).
+- Textos a diccionarios (`es` y `en`; portugués si hay demanda), fechas, números y plurales con `Intl`,
+  selector de idioma y manifiesto de la PWA por idioma.
+
+**Terminada cuando:** no queda texto fijo en los componentes; las dos lenguas pasan la batería; axe no
+reporta errores graves; y la auditoría manual queda firmada en el README con lo que falta.
+
+### Etapa 20 · Operación, datos y confianza (V2.6)
+
+**Objetivo:** que la app aguante años de datos, versiones y usuarios sin sustos, y que se pueda operar.
+
+- Migraciones versionadas de localStorage, IndexedDB y la nube, probadas con archivos de cada versión
+  anterior; detección de cuota y limpieza guiada (la tarjeta de la Etapa 13 crece hasta aquí).
+- Límite de errores y reporte **opt-in**, métricas de activación sin datos personales, y un panel para la
+  cola de envíos y la sincronización.
+- Exportar y borrar la cuenta de verdad (GDPR): qué se borra, cuándo y qué queda en los registros.
+- Revisión de seguridad: RLS, límites de tasa, rotación de secretos, dependencias y respaldo de la base.
+- Playwright en CI con capturas de las pantallas clave, presupuesto de rendimiento y alertas.
+
+**Terminada cuando:** una instalación de cada versión migra sin perder nada; exportar y borrar deja la
+cuenta limpia; una cuota llena se recupera sin corromper datos; y hay alertas para envíos y cola.
+
+### Etapa 21 · Apps nativas iOS y Android (V3.0)
+
+**Objetivo:** estar en las tiendas con lo que la web no puede dar: avisos nativos, widgets y bloqueo.
+
+- Envoltura con Capacitor para iOS y Android, reutilizando la app; recursos y navegación sin parpadeos.
+- Push nativo (APNs y FCM) cuando corre en la app, y el push web actual cuando corre en el navegador;
+  notificaciones locales para posponer y repetir sin red.
+- Widgets con los próximos recordatorios, extensión para compartir, enlaces profundos y bloqueo con
+  biometría opcional.
+- Fichas de tienda, etiquetas de privacidad, versión beta en TestFlight y pista interna de Play.
+
+**Terminada cuando:** la beta está en las dos tiendas; el aviso llega con la app cerrada en iOS y Android;
+los widgets muestran lo que deben; la biometría se puede activar y desactivar; y las dos revisiones
+pasaron.
+
+### Etapa 22 · Lanzamiento público y soporte (V3.1)
+
+**Objetivo:** abrir de verdad, con red debajo.
+
+- Beta cerrada → abierta, embudo de alta medido y ajustes de onboarding con datos, no con opiniones.
+- Centro de ayuda, bandeja de soporte, página de estado y plan de respuesta.
+- Términos, privacidad y encargado de tratamiento; decisión de precio o plan gratuito con límites, si
+  corresponde.
+- Matriz final de dispositivos y navegadores, plan de vuelta atrás del despliegue y cadencia de
+  mantenimiento (una entrega por mes, con su suite).
+
+**Terminada cuando:** la app es pública, el monitoreo lleva dos semanas en verde, el soporte tiene tiempos
+documentados y queda el informe de lanzamiento con lo aprendido y el roadmap de la V3.2.
+
+### Qué queda fuera (a propósito)
+
+Apps de escritorio nativas, SSO empresarial y consola de administración, un asistente con IA que invente
+recordatorios, publicidad y un mercado de plantillas. Si alguna entra, será una etapa nueva con su propio
+número: este roadmap termina en la V3.1, con AVISPATE instalable, sincronizada, colaborativa y en las
+tiendas. La Etapa 14 es la próxima; conviene iniciar ya las verificaciones externas que tardan (cuenta de
+Meta Business, dominio y proveedor de correo) para que no frenen el código.
 
 ## Preguntas sobre el permiso de notificaciones y el aviso de inactividad
 
@@ -462,10 +689,6 @@ cuando llegue el envío real por WhatsApp y correo.
 
 ## Preguntas sobre los calendarios y el selector de archivos
 
-**¿La sincronización con Apple Calendar y Outlook es automática?** Todavía no, y conviene decirlo claro: en el navegador no hay una cuenta que conectar, así que la app hace lo que sí puede hacer sin backend — bajar el `.ics` (Apple Calendar lo abre en el iPhone o el Mac; Outlook lo importa desde el escritorio) y abrir el enlace de Outlook con el evento ya rellenado, el mismo que usa su botón «Agregar al calendario». «Sincronizar ahora» baja **todos** los recordatorios de ese usuario en un solo archivo, no uno por uno. Una sincronización de verdad —que un cambio hecho en la app aparezca solo en el calendario y al revés— necesita permisos de la cuenta: OAuth de Google, CalDAV/iCloud de Apple y Microsoft Graph para Outlook, o una suscripción a una URL `webcal://` que sirva el `.ics` desde un servidor. Eso llega con el backend, junto con el envío real de WhatsApp y correo.
+**¿La sincronización con Apple Calendar y Outlook es automática?** Todavía no, y conviene decirlo claro: en el navegador no hay una cuenta que conectar, así que la app hace lo que sí puede hacer sin backend — bajar el `.ics` (Apple Calendar lo abre en el iPhone o el Mac; Outlook lo importa desde el escritorio) y abrir el enlace de Outlook con el evento ya rellenado, el mismo que usa su botón «Agregar al calendario». «Sincronizar ahora» baja **todos** los recordatorios de ese usuario en un solo archivo, no uno por uno. Una sincronización de verdad —que un cambio hecho en la app aparezca solo en el calendario y al revés— necesita permisos de la cuenta: OAuth de Google, CalDAV/iCloud de Apple y Microsoft Graph para Outlook, o una suscripción a una URL `webcal://` que sirva el `.ics` desde un servidor. Eso llega en la Etapa 16 del roadmap, después de la cuenta y la sincronización entre teléfonos.
 
 **¿Se puede evitar que el teléfono ofrezca la cámara al adjuntar una imagen?** Depende del navegador. Donde existe el selector de archivos del sistema (`showOpenFilePicker`: Chrome de escritorio y de Android) la app lo usa y la cámara no aparece como opción, porque ese selector es el explorador de archivos. Donde no existe (Safari de iPhone, Firefox) se cae al `<input type="file">` de siempre, y ahí la cámara la agrega el sistema operativo a *su* menú porque el campo acepta imágenes: iOS y Android muestran «Tomar foto» y una página web no puede quitar esa entrada (lo único que la haría desaparecer es dejar de aceptar imágenes, lo que también dejaría fuera la galería y las fotos ya guardadas). Por eso el botón **«Sacar foto»** sigue siendo la cámara de la app, con encuadre y cambio de cámara frontal/trasera, y la casilla «Imagen o documento» sirve para lo que ya está en el teléfono o en la nube.
-
-
-
-
