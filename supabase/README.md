@@ -16,9 +16,11 @@ Supabase · tablas dispositivos + avisos  ◀── cron cada minuto ──▶ E
 ## Puesta en marcha (una sola vez)
 
 1. **Tablas y cron.** En Supabase → *SQL Editor*, pegá
-   `supabase/migrations/0001_etapa10.sql` después de cambiar `<ANON_KEY>` por la anon key del
-   proyecto (*Project Settings → API → Project API keys → anon public*). Es la misma clave pública que
-   usa la app, así que no hay ningún secreto nuevo en la base. Después, *Run*.
+   `supabase/migrations/0001_etapa10.sql` con `<ANON_KEY>` cambiada por la anon key del proyecto
+   (*Project Settings → API keys → anon public*). Es la misma clave pública que usa la app, así que no
+   hay ningún secreto nuevo en la base. Después, *Run*. El archivo del repo conserva el marcador a
+   propósito: si lo corrés tal cual, el editor avisa *«Falta la anon key en v_anon»* y el cron queda
+   sin autorización.
    Al final, esta consulta debe devolver dos filas (`avispate-avisos` y `avispate-limpieza`):
 
    ```sql
@@ -32,15 +34,17 @@ Supabase · tablas dispositivos + avisos  ◀── cron cada minuto ──▶ E
    versiona). Se suben a Supabase así:
 
    ```bash
-   npx supabase login
-   npx supabase link --project-ref vmctsurhswayrrkggj
-   npx supabase secrets set --env-file supabase/.env.functions
+   npx --yes supabase@latest login
+   npx --yes supabase@latest link --project-ref vmctsurhswayrrwrkggj
+   npx --yes supabase@latest secrets set --env-file supabase/.env.functions
    ```
+
+   El `--yes` evita que `npx` se quede esperando un «Ok to proceed?» que nadie ve.
 
 3. **Publicar la función.**
 
    ```bash
-   npx supabase functions deploy enviar-avisos --project-ref vmctsurhswayrrkggj
+   npx --yes supabase@latest functions deploy enviar-avisos --project-ref vmctsurhswayrrwrkggj
    ```
 
    Queda con la verificación de JWT activada (la de por defecto): el cron manda la anon key, que es un
@@ -50,12 +54,12 @@ Supabase · tablas dispositivos + avisos  ◀── cron cada minuto ──▶ E
 
    ```bash
    source .env.local
-   curl -s -X POST "https://vmctsurhswayrrkggj.supabase.co/functions/v1/enviar-avisos" \
+   curl -s -X POST "https://vmctsurhswayrrwrkggj.supabase.co/functions/v1/enviar-avisos" \
      -H "Authorization: Bearer $VITE_SUPABASE_ANON_KEY" \
      -H "Content-Type: application/json" -d '{}'
    ```
 
-5. **La app.** Poné la anon key en `.env.local` (ya está la URL) y compilá:
+5. **La app.** `.env.local` ya tiene la URL, la anon key y la VAPID pública. Compilá y abrí el preview:
 
    ```bash
    npm run build && npm run preview   # https://localhost:8443
@@ -89,4 +93,5 @@ central y no un lujo.
 | «Faltan las tablas en Supabase» | No se corrió la migración (paso 1) o se corrió en otro proyecto. |
 | La prueba no llega y `enviados` es 0 | La suscripción está vacía: en Ajustes, *Apagar* y *Activar avisos* de nuevo. |
 | `401` al llamar la función | Se publicó con `--no-verify-jwt` y el cron manda la anon key, o la anon key del SQL es de otro proyecto. |
+| `403` al entregar el push | Las dos claves VAPID públicas tienen que ser la misma: el teléfono se suscribe con `VITE_VAPID_PUBLIC_KEY` y el servidor firma con `VAPID_PUBLIC_KEY`. Se generan juntas, con `node scripts/generar-vapid.mjs`. |
 | `ultimo_error` en `avisos` | Ahí queda el motivo que devolvió el servicio de push (claves VAPID distintas, por ejemplo). |

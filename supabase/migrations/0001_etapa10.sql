@@ -228,12 +228,15 @@ create extension if not exists pg_net;
 
 do $$
 declare
-  -- ⇩⇩⇩  Reemplazar por la anon key del proyecto (Settings → API → anon public).  ⇩⇩⇩
+  -- La anon key del proyecto (Settings → API keys → anon public): es pública por diseño, la misma
+  -- que ya viaja en el bundle de la app, así que no agrega ningún secreto nuevo a la base.
   v_anon text := '<ANON_KEY>';
-  v_url text := 'https://vmctsurhswayrrkggj.supabase.co/functions/v1/enviar-avisos';
+  v_url text := 'https://vmctsurhswayrrwrkggj.supabase.co/functions/v1/enviar-avisos';
 begin
+  -- Si alguien corre la plantilla tal cual, el cron quedaría programado con la palabra <ANON_KEY>
+  -- como credencial: el aviso de abajo es lo único que lo delata, porque el 401 no se ve desde acá.
   if v_anon like '<%' then
-    raise notice 'Falta reemplazar <ANON_KEY>: el cron quedó sin autorización. Volvé a correr esta parte.';
+    raise notice 'Falta la anon key en v_anon: el cron quedaría sin autorización. Reemplazala antes de correr esto.';
   end if;
 
   if exists (select 1 from cron.job where jobname = 'avispate-avisos') then
