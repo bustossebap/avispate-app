@@ -7,7 +7,7 @@
     <title><!-- figma:title --></title>
     <script>
       try {
-        var d = localStorage.getItem("recuerda.dark.v1");
+        var d = localStorage.getItem("avispate.dark.v1") || localStorage.getItem("recuerda.dark.v1");
         if (d === "1" || (d === null && window.matchMedia("(prefers-color-scheme: dark)").matches)) {
           document.documentElement.classList.add("dark");
         }

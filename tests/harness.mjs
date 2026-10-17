@@ -7,7 +7,7 @@
 //   import { cargarBundle, montar, reporter, wait } from "./harness.mjs";
 //   const { live, bundle, css } = await cargarBundle();
 //   const { check, finish } = reporter();
-//   const m = montar(bundle, { "recuerda.onboarding.v1": "1", ... });
+//   const m = montar(bundle, { "avispate.onboarding.v1": "1", ... });
 //   ...
 //   process.exit(finish() ? 1 : 0);
 //
@@ -201,11 +201,11 @@ export function montar(bundle, seed = {}, opciones = {}) {
     return raw === null ? null : JSON.parse(raw)
   }
   const raw = (k) => window.localStorage.getItem(k)
-  const events = () => storage("recuerda.events.v1") || []
-  const notifications = () => storage("recuerda.notifications.v1") || []
+  const events = () => storage("avispate.events.v1") || []
+  const notifications = () => storage("avispate.notifications.v1") || []
   const notifOf = (name) => notifications().find((n) => n.eventName === name)
   const profileOf = (id) =>
-    (storage("recuerda.profiles.v1") || []).find((p) => p.id === id)
+    (storage("avispate.profiles.v1") || []).find((p) => p.id === id)
   // Buscar por aria-label comparando el atributo y no con un selector: los selectores de atributo con
   // emoji fallan en el motor de jsdom, y media app tiene etiquetas con emoji.
   // En todo el documento y no solo en #root: los modales (la hoja de emojis, la foto) se dibujan con un

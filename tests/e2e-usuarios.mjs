@@ -47,9 +47,9 @@ const { check, finish } = reporter()
 // ------------------------------------------------ U1) Ajustes con dos usuarios (independencia)
 {
   const m = mount({
-    "recuerda.onboarding.v1": "1",
-    "recuerda.profiles.v1": JSON.stringify([YO, ABUELA]),
-    "recuerda.activeProfile.v1": "yo",
+    "avispate.onboarding.v1": "1",
+    "avispate.profiles.v1": JSON.stringify([YO, ABUELA]),
+    "avispate.activeProfile.v1": "yo",
   })
   await wait(150)
   m.clickText("button", "Ajustes")
@@ -181,11 +181,11 @@ const { check, finish } = reporter()
 // ------------------------------------------------ U1b) Agregar un usuario desde Ajustes
 {
   const m = mount({
-    "recuerda.onboarding.v1": "1",
-    "recuerda.profiles.v1": JSON.stringify([YO]),
-    "recuerda.activeProfile.v1": "yo",
+    "avispate.onboarding.v1": "1",
+    "avispate.profiles.v1": JSON.stringify([YO]),
+    "avispate.activeProfile.v1": "yo",
     // Yo tiene un recordatorio: así se ve que el usuario nuevo arranca vacío y no hereda lo ajeno.
-    "recuerda.events.v1": JSON.stringify([
+    "avispate.events.v1": JSON.stringify([
       reminderFor("u-yo", "yo", "Cita Yo"),
     ]),
   })
@@ -199,7 +199,7 @@ const { check, finish } = reporter()
   const nombre = () =>
     m.doc.querySelector('#root input[placeholder="Nombre (ej. Abuela)"]')
   const activo = () =>
-    m.window.localStorage.getItem("recuerda.activeProfile.v1")
+    m.window.localStorage.getItem("avispate.activeProfile.v1")
 
   check(
     "U1b · «Usuarios de este dispositivo» trae «＋ Nuevo usuario»",
@@ -230,7 +230,7 @@ const { check, finish } = reporter()
   await wait(40)
   check(
     "U1b · sin nombre no agrega nada (el formulario sigue abierto)",
-    (m.storage("recuerda.profiles.v1") || []).length === 1 && !!nombre(),
+    (m.storage("avispate.profiles.v1") || []).length === 1 && !!nombre(),
   )
 
   m.type(nombre(), "Taller")
@@ -284,7 +284,7 @@ const { check, finish } = reporter()
 
   m.click(agregar())
   await wait(90)
-  const creado = (m.storage("recuerda.profiles.v1") || []).find(
+  const creado = (m.storage("avispate.profiles.v1") || []).find(
     (p) => p.name === "Taller",
   )
   check(
@@ -292,7 +292,7 @@ const { check, finish } = reporter()
     !!creado &&
       creado.emoji === "🦊" &&
       String(creado.photo || "").startsWith("data:image/") &&
-      (m.storage("recuerda.profiles.v1") || []).length === 2,
+      (m.storage("avispate.profiles.v1") || []).length === 2,
     JSON.stringify(creado),
   )
   check(
@@ -321,9 +321,9 @@ const { check, finish } = reporter()
   await wait(60)
   check(
     "U1b · «×» cancela el alta sin dejar nada a medias",
-    (m.storage("recuerda.profiles.v1") || []).length === 2 && !nombre(),
+    (m.storage("avispate.profiles.v1") || []).length === 2 && !nombre(),
     JSON.stringify(
-      (m.storage("recuerda.profiles.v1") || []).map((p) => p.name),
+      (m.storage("avispate.profiles.v1") || []).map((p) => p.name),
     ),
   )
   check(
@@ -336,9 +336,9 @@ const { check, finish } = reporter()
 // ------------------------------------------------ U3) Crear: canales y calendario por usuario
 {
   const m = mount({
-    "recuerda.onboarding.v1": "1",
-    "recuerda.profiles.v1": JSON.stringify([YO, ABUELA]),
-    "recuerda.activeProfile.v1": "yo",
+    "avispate.onboarding.v1": "1",
+    "avispate.profiles.v1": JSON.stringify([YO, ABUELA]),
+    "avispate.activeProfile.v1": "yo",
   })
   await wait(150)
   m.click(m.doc.querySelector('[aria-label="Nuevo recordatorio"]'))
@@ -399,10 +399,10 @@ const { check, finish } = reporter()
 // ------------------------------------------------ U3) el motor avisa por los canales del dueño
 {
   const m = mount({
-    "recuerda.onboarding.v1": "1",
-    "recuerda.profiles.v1": JSON.stringify([YO, ABUELA]),
-    "recuerda.activeProfile.v1": "yo",
-    "recuerda.events.v1": JSON.stringify([
+    "avispate.onboarding.v1": "1",
+    "avispate.profiles.v1": JSON.stringify([YO, ABUELA]),
+    "avispate.activeProfile.v1": "yo",
+    "avispate.events.v1": JSON.stringify([
       reminderFor("u-yo", "yo", "Cita Yo"),
       reminderFor("u-ab", "abuela", "Cita Abuela"),
     ]),
@@ -433,13 +433,13 @@ const { check, finish } = reporter()
 // ------------------------------------------------ U4) sin ningún canal listo no se envía nada
 {
   const m = mount({
-    "recuerda.onboarding.v1": "1",
-    "recuerda.profiles.v1": JSON.stringify([
+    "avispate.onboarding.v1": "1",
+    "avispate.profiles.v1": JSON.stringify([
       YO,
       { ...ABUELA, channels: { push: false, whatsapp: true, email: false } },
     ]),
-    "recuerda.activeProfile.v1": "abuela",
-    "recuerda.events.v1": JSON.stringify([
+    "avispate.activeProfile.v1": "abuela",
+    "avispate.events.v1": JSON.stringify([
       reminderFor("u-ab", "abuela", "Cita Abuela"),
     ]),
   })
@@ -451,7 +451,7 @@ const { check, finish } = reporter()
   )
   check(
     "U4 · y no se marca como enviado, así lo recibe al configurar su canal",
-    m.window.localStorage.getItem(`recuerda.sent.u-ab:preset-1:${dayKey()}`) ===
+    m.window.localStorage.getItem(`avispate.sent.u-ab:preset-1:${dayKey()}`) ===
       null,
   )
   check(
@@ -464,7 +464,7 @@ const { check, finish } = reporter()
 // ------------------------------------------------ U5) migración de la V1.5
 {
   const m = mount({
-    "recuerda.onboarding.v1": "1",
+    "avispate.onboarding.v1": "1",
     "recuerda.contacto.v1": JSON.stringify({
       phone: "+56 9 5555 6666",
       email: "viejo@ejemplo.com",

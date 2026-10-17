@@ -59,9 +59,9 @@ const mount = (seed) => montar(bundle, seed)
 
 const { check, finish } = reporter()
 const seedApp = (extra) => ({
-  "recuerda.onboarding.v1": "1",
-  "recuerda.profiles.v1": JSON.stringify([YO, ABUELA, EMPRESA]),
-  "recuerda.activeProfile.v1": "yo",
+  "avispate.onboarding.v1": "1",
+  "avispate.profiles.v1": JSON.stringify([YO, ABUELA, EMPRESA]),
+  "avispate.activeProfile.v1": "yo",
   ...extra,
 })
 
@@ -363,7 +363,7 @@ const seedApp = (extra) => ({
     "C2 · Yo (datos de antes) tiene el ticket marcado",
     !!ticket() &&
       ticket().checked === true &&
-      m.txt().includes("Acepto que RECUERDA use estos datos"),
+      m.txt().includes("Acepto que AVISPATE use estos datos"),
     JSON.stringify(m.txt().slice(0, 200)),
   )
   check(
@@ -376,7 +376,7 @@ const seedApp = (extra) => ({
   check(
     "C2 · sin datos no hay nada que aceptar: no aparece el ticket",
     m.doc.getElementById("profile-contact-accept") === null &&
-      !m.txt().includes("Acepto que RECUERDA"),
+      !m.txt().includes("Acepto que AVISPATE"),
   )
 
   m.click(m.rowOf("Empresa").querySelector("button"))
@@ -478,8 +478,8 @@ const seedApp = (extra) => ({
   }
   const m = mount({
     ...seedApp(),
-    "recuerda.profiles.v1": JSON.stringify([abierta]),
-    "recuerda.events.v1": JSON.stringify([
+    "avispate.profiles.v1": JSON.stringify([abierta]),
+    "avispate.events.v1": JSON.stringify([
       reminderFor("t-1", "yo", "Con ticket abierto"),
     ]),
   })
@@ -496,8 +496,8 @@ const seedApp = (extra) => ({
   }
   const m2 = mount({
     ...seedApp(),
-    "recuerda.profiles.v1": JSON.stringify([cerrado]),
-    "recuerda.events.v1": JSON.stringify([
+    "avispate.profiles.v1": JSON.stringify([cerrado]),
+    "avispate.events.v1": JSON.stringify([
       reminderFor("t-2", "yo", "Con ticket marcado"),
     ]),
   })
@@ -518,12 +518,12 @@ const seedApp = (extra) => ({
 {
   const m = mount(
     seedApp({
-      "recuerda.events.v1": JSON.stringify([
+      "avispate.events.v1": JSON.stringify([
         reminderFor("e-yo", "yo", "Cita Yo"),
         reminderFor("e-ab", "abuela", "Cita Abuela"),
         reminderFor("e-em", "empresa", "Cita Empresa"),
       ]),
-      "recuerda.notifications.v1": JSON.stringify([
+      "avispate.notifications.v1": JSON.stringify([
         notifFor("e-yo", "yo", "Cita Yo"),
         notifFor("e-ab", "abuela", "Cita Abuela"),
         notifFor("e-em", "empresa", "Cita Empresa"),
@@ -561,7 +561,7 @@ const seedApp = (extra) => ({
   check(
     "D1 · el segundo toque borra el perfil",
     m.profileOf("empresa") === undefined,
-    JSON.stringify((m.storage("recuerda.profiles.v1") || []).map((p) => p.id)),
+    JSON.stringify((m.storage("avispate.profiles.v1") || []).map((p) => p.id)),
   )
   check(
     "D1 · y su fila desaparece de Ajustes",
@@ -591,13 +591,13 @@ const seedApp = (extra) => ({
   check(
     "D2 · borrar el usuario activo lo elimina de la lista",
     m.profileOf("yo") === undefined && !m.rowOf("Yo"),
-    JSON.stringify((m.storage("recuerda.profiles.v1") || []).map((p) => p.id)),
+    JSON.stringify((m.storage("avispate.profiles.v1") || []).map((p) => p.id)),
   )
   check(
     "D2 · y la app pasa al usuario que queda",
-    m.raw("recuerda.activeProfile.v1") === "abuela" &&
+    m.raw("avispate.activeProfile.v1") === "abuela" &&
       m.txt().includes("Contacto de Abuela"),
-    m.raw("recuerda.activeProfile.v1"),
+    m.raw("avispate.activeProfile.v1"),
   )
   check(
     "D2 · sin tocar los datos del que queda",

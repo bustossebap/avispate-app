@@ -47,9 +47,9 @@ const mount = (seed) => ampliar(montar(bundle, seed))
 
 const { check, finish } = reporter()
 const seedBase = (extra) => ({
-  "recuerda.onboarding.v1": "1",
-  "recuerda.profiles.v1": JSON.stringify([YO]),
-  "recuerda.activeProfile.v1": "yo",
+  "avispate.onboarding.v1": "1",
+  "avispate.profiles.v1": JSON.stringify([YO]),
+  "avispate.activeProfile.v1": "yo",
   ...extra,
 })
 
@@ -57,8 +57,8 @@ const seedBase = (extra) => ({
 {
   const m = mount(
     seedBase({
-      "recuerda.reloj.v1": "24",
-      "recuerda.events.v1": JSON.stringify([
+      "avispate.reloj.v1": "24",
+      "avispate.events.v1": JSON.stringify([
         evento("e1", "Renovar licencia", "14:30"),
       ]),
     }),
@@ -112,8 +112,8 @@ const seedBase = (extra) => ({
   await wait(40)
   check(
     "H1 · elegir a.m./p.m. se guarda en el dispositivo",
-    m.raw("recuerda.reloj.v1") === "12",
-    String(m.raw("recuerda.reloj.v1")),
+    m.raw("avispate.reloj.v1") === "12",
+    String(m.raw("avispate.reloj.v1")),
   )
   const filaDespues = m.doc
     .querySelector('[aria-label="Formato de hora"]')
@@ -198,8 +198,8 @@ const seedBase = (extra) => ({
 {
   const m = mount(
     seedBase({
-      "recuerda.reloj.v1": "24",
-      "recuerda.events.v1": JSON.stringify([
+      "avispate.reloj.v1": "24",
+      "avispate.events.v1": JSON.stringify([
         evento("e1", "Medianoche", "00:30"),
         evento("e2", "Noche", "22:30"),
       ]),
@@ -267,7 +267,7 @@ const seedBase = (extra) => ({
 
 // ------------------------------------------- F1) secciones Archivos y Fecha - Hora al crear
 {
-  const m = mount(seedBase({ "recuerda.reloj.v1": "12" }))
+  const m = mount(seedBase({ "avispate.reloj.v1": "12" }))
   await wait(150)
   await m.crearNuevo()
   const fecha = m.doc.querySelector('input[type="date"]')

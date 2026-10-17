@@ -32,10 +32,10 @@ const YO = {
 }
 const ABUELA = { id: "abuela", name: "Abuela", emoji: "👵" }
 const seedBase = (extra) => ({
-  "recuerda.onboarding.v1": "1",
-  "recuerda.profiles.v1": JSON.stringify([YO]),
-  "recuerda.activeProfile.v1": "yo",
-  "recuerda.reloj.v1": "24",
+  "avispate.onboarding.v1": "1",
+  "avispate.profiles.v1": JSON.stringify([YO]),
+  "avispate.activeProfile.v1": "yo",
+  "avispate.reloj.v1": "24",
   ...extra,
 })
 
@@ -168,7 +168,7 @@ const { check, finish } = reporter()
   m.clickText("button", "Agregar")
   await wait(60)
   const taller = () =>
-    (m.storage("recuerda.profiles.v1") || []).find((p) => p.name === "Taller")
+    (m.storage("avispate.profiles.v1") || []).find((p) => p.name === "Taller")
   check(
     "E1 · el usuario nuevo se guarda con su emoji",
     taller()?.emoji === "🐝",
@@ -178,14 +178,14 @@ const { check, finish } = reporter()
     "E1 · y queda activo en el inicio",
     m.txt().includes("Taller"),
     JSON.stringify(
-      (m.storage("recuerda.profiles.v1") || []).map((p) => p.name),
+      (m.storage("avispate.profiles.v1") || []).map((p) => p.name),
     ),
   )
 
   // b) cambiarlo después, en Ajustes › Mi perfil, sin tocar a los demás. El nombre y la cara (emoji o
   //    foto) se editan con el botón «Editar» y recién se guardan al apretar «Guardar».
   await m.irAjustes()
-  const tallerId = (m.storage("recuerda.profiles.v1") || []).find(
+  const tallerId = (m.storage("avispate.profiles.v1") || []).find(
     (p) => p.name === "Taller",
   )?.id
   const tallerAhora = () => m.profileOf(tallerId)
@@ -384,7 +384,7 @@ const { check, finish } = reporter()
 
   // ------------------------------------------- C) Apple Calendar y Outlook por recordatorio
   {
-    const m = mount(seedBase({ "recuerda.profiles.v1": JSON.stringify([YO]) }))
+    const m = mount(seedBase({ "avispate.profiles.v1": JSON.stringify([YO]) }))
     await wait(150)
     await m.crearNuevo()
     const sw = (app) =>
@@ -475,7 +475,7 @@ const { check, finish } = reporter()
       outlook: { connected: true, syncAll: true },
     }
     const m2 = mount(
-      seedBase({ "recuerda.profiles.v1": JSON.stringify([conectado]) }),
+      seedBase({ "avispate.profiles.v1": JSON.stringify([conectado]) }),
     )
     await wait(150)
     await m2.crearNuevo()
@@ -495,7 +495,7 @@ const { check, finish } = reporter()
 
     const soloApple = { ...YO, apple: { connected: true, syncAll: false } }
     const m3 = mount(
-      seedBase({ "recuerda.profiles.v1": JSON.stringify([soloApple]) }),
+      seedBase({ "avispate.profiles.v1": JSON.stringify([soloApple]) }),
     )
     await wait(150)
     await m3.crearNuevo()
@@ -513,7 +513,7 @@ const { check, finish } = reporter()
   // El detalle del recordatorio ofrece los tres calendarios y marca cada uno por separado.
   const d = mount(
     seedBase({
-      "recuerda.events.v1": JSON.stringify([
+      "avispate.events.v1": JSON.stringify([
         evento("e1", "yo", "Renovar licencia"),
       ]),
     }),
@@ -566,8 +566,8 @@ const { check, finish } = reporter()
   ]
   const m = mount({
     ...seedBase({
-      "recuerda.profiles.v1": JSON.stringify([YO, ABUELA]),
-      "recuerda.events.v1": JSON.stringify(eventos),
+      "avispate.profiles.v1": JSON.stringify([YO, ABUELA]),
+      "avispate.events.v1": JSON.stringify(eventos),
     }),
   })
   await wait(150)
@@ -850,8 +850,8 @@ const { check, finish } = reporter()
 {
   const m = mount(
     seedBase({
-      "recuerda.profiles.v1": JSON.stringify([YO, ABUELA]),
-      "recuerda.events.v1": JSON.stringify([
+      "avispate.profiles.v1": JSON.stringify([YO, ABUELA]),
+      "avispate.events.v1": JSON.stringify([
         evento("g1", "yo", "Cambio de aceite"),
       ]),
     }),
@@ -946,7 +946,7 @@ const { check, finish } = reporter()
 
   // e) Crear: el chip del canal y el aviso de canal sin configurar lo nombran con su logo real.
   const m2 = mount(
-    seedBase({ "recuerda.profiles.v1": JSON.stringify([YO, ABUELA]) }),
+    seedBase({ "avispate.profiles.v1": JSON.stringify([YO, ABUELA]) }),
   )
   await wait(150)
   await m2.crearNuevo()
@@ -979,7 +979,7 @@ const { check, finish } = reporter()
   // f) El detalle del recordatorio: los canales también con el logo en vez del emoji.
   const d = mount(
     seedBase({
-      "recuerda.events.v1": JSON.stringify([
+      "avispate.events.v1": JSON.stringify([
         {
           ...evento("g2", "yo", "Renovar licencia"),
           channels: ["Notificación", "WhatsApp", "Correo"],
@@ -1023,6 +1023,6 @@ check(
     !bundle.includes("Descargar archivo .ics") &&
     !bundle.includes("no irá a tu calendario."),
 )
-check("D · la entrega en curso es la Etapa 6", bundle.includes("Etapa 6"))
+check("D · la entrega en curso es la Etapa 7", bundle.includes("Etapa 7"))
 
 process.exit(finish() ? 1 : 0)

@@ -213,7 +213,7 @@ const { check, finish } = reporter()
 
   // El contacto y los calendarios ya no son claves globales: viven dentro del usuario "yo".
   const yoProfile = () =>
-    (m.storage("recuerda.profiles.v1") || []).find((p) => p.id === "yo")
+    (m.storage("avispate.profiles.v1") || []).find((p) => p.id === "yo")
   check(
     "A · la burbuja resume que no hay ninguno conectado",
     (abreCal()?.textContent || "").includes("sin conectar") &&
@@ -296,7 +296,7 @@ const { check, finish } = reporter()
 
   check(
     "A · cierra el onboarding y entra al inicio",
-    m.window.localStorage.getItem("recuerda.onboarding.v1") === "1" &&
+    m.window.localStorage.getItem("avispate.onboarding.v1") === "1" &&
       m.dots().length === 0,
     JSON.stringify(m.txt().slice(0, 80)),
   )
@@ -312,15 +312,15 @@ const { check, finish } = reporter()
   )
   check(
     "A · el usuario «yo» queda con el nombre escrito",
-    (m.storage("recuerda.profiles.v1") || []).find((p) => p.id === "yo")
+    (m.storage("avispate.profiles.v1") || []).find((p) => p.id === "yo")
       ?.name === "Sebastián",
   )
   check(
     "A · y con la abeja como cara por defecto (no eligió ninguna)",
-    (m.storage("recuerda.profiles.v1") || []).find((p) => p.id === "yo")
+    (m.storage("avispate.profiles.v1") || []).find((p) => p.id === "yo")
       ?.emoji === "🐝",
     JSON.stringify(
-      (m.storage("recuerda.profiles.v1") || []).find((p) => p.id === "yo"),
+      (m.storage("avispate.profiles.v1") || []).find((p) => p.id === "yo"),
     ),
   )
   check(
@@ -353,7 +353,7 @@ const { check, finish } = reporter()
     "B · «Saltar por ahora» en el nombre lleva al último paso (no cierra)",
     m.txt().includes("te avisamos?") &&
       m.dots()[6]?.getAttribute("aria-current") === "true" &&
-      m.window.localStorage.getItem("recuerda.onboarding.v1") === null,
+      m.window.localStorage.getItem("avispate.onboarding.v1") === null,
     JSON.stringify(m.txt().slice(0, 90)),
   )
   check(
@@ -364,20 +364,20 @@ const { check, finish } = reporter()
   await wait(80)
   check(
     "B · saltar al final cierra el onboarding",
-    m.window.localStorage.getItem("recuerda.onboarding.v1") === "1" &&
+    m.window.localStorage.getItem("avispate.onboarding.v1") === "1" &&
       m.dots().length === 0,
   )
   check(
     "B · saltar NO guarda el contacto",
-    !(m.storage("recuerda.profiles.v1") || []).find((p) => p.id === "yo")
+    !(m.storage("avispate.profiles.v1") || []).find((p) => p.id === "yo")
       ?.contact && m.storage("recuerda.contacto.v1") === null,
     JSON.stringify(
-      (m.storage("recuerda.profiles.v1") || []).find((p) => p.id === "yo"),
+      (m.storage("avispate.profiles.v1") || []).find((p) => p.id === "yo"),
     ),
   )
   check(
     "B · pero sí conserva el nombre escrito",
-    (m.storage("recuerda.profiles.v1") || []).find((p) => p.id === "yo")
+    (m.storage("avispate.profiles.v1") || []).find((p) => p.id === "yo")
       ?.name === "Abuela",
   )
   check(
@@ -429,7 +429,7 @@ const { check, finish } = reporter()
       .querySelector('[aria-label="Sincronizar con Google Calendar"]')
       .getAttribute("aria-checked") === "true",
   )
-  const migrado = (m.storage("recuerda.profiles.v1") || []).find(
+  const migrado = (m.storage("avispate.profiles.v1") || []).find(
     (p) => p.id === "yo",
   )
   check(

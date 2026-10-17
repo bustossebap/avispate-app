@@ -50,10 +50,10 @@ const mount = (seed, notif = {}) =>
 
 const { check, finish } = reporter()
 const seedBase = (extra) => ({
-  "recuerda.onboarding.v1": "1",
-  "recuerda.profiles.v1": JSON.stringify([YO]),
-  "recuerda.activeProfile.v1": "yo",
-  "recuerda.reloj.v1": "24",
+  "avispate.onboarding.v1": "1",
+  "avispate.profiles.v1": JSON.stringify([YO]),
+  "avispate.activeProfile.v1": "yo",
+  "avispate.reloj.v1": "24",
   ...extra,
 })
 
@@ -74,7 +74,7 @@ const plano = (el) =>
 {
   const m = mount(
     seedBase({
-      "recuerda.events.v1": JSON.stringify([
+      "avispate.events.v1": JSON.stringify([
         evento("e1", "Renovar licencia", "14:30"),
       ]),
     }),
@@ -117,8 +117,8 @@ const plano = (el) =>
   const despues = m.clockGroup()
   check(
     "H1 · elegir a.m./p.m. se guarda en el dispositivo",
-    m.raw("recuerda.reloj.v1") === "12",
-    String(m.raw("recuerda.reloj.v1")),
+    m.raw("avispate.reloj.v1") === "12",
+    String(m.raw("avispate.reloj.v1")),
   )
   check(
     "H1 · el control no se mueve: misma fila, mismos botones y mismos textos",
@@ -138,9 +138,9 @@ const plano = (el) =>
   await wait(60)
   check(
     "H1 · volver a 24 h tampoco mueve nada",
-    m.raw("recuerda.reloj.v1") === "24" &&
+    m.raw("avispate.reloj.v1") === "24" &&
       plano(m.clockGroup()?.parentElement) === antesDeVolver,
-    String(m.raw("recuerda.reloj.v1")),
+    String(m.raw("avispate.reloj.v1")),
   )
   m.clickText("button", "Inicio")
   await wait(80)
@@ -193,7 +193,7 @@ const plano = (el) =>
     },
   ]
   const m = mount(
-    seedBase({ "recuerda.profiles.v1": JSON.stringify(perfiles) }),
+    seedBase({ "avispate.profiles.v1": JSON.stringify(perfiles) }),
   )
   await wait(150)
   await m.irAjustes()
@@ -516,12 +516,12 @@ const plano = (el) =>
     // app carga sus recordatorios de demostración (fechas fijas) y, cuando alguno cae dentro de su
     // plazo de aviso, el motor manda además su notificación y `sent` deja de tener solo el aviso.
     const sinRecordatorios = (extra) =>
-      seedBase({ "recuerda.events.v1": "[]", ...extra })
+      seedBase({ "avispate.events.v1": "[]", ...extra })
     {
       const FRASE = "Bzzt… no te olvides de no olvidarte, ¡avíspate!"
       // a) vuelve después de 8 días: queda el aviso en el historial y sale la notificación del navegador.
       const m = mount(
-        sinRecordatorios({ "recuerda.ultimaVisita.v1": hace(8) }),
+        sinRecordatorios({ "avispate.ultimaVisita.v1": hace(8) }),
         {
           permission: "granted",
         },
@@ -537,15 +537,15 @@ const plano = (el) =>
       check(
         "I1 · con el título del aviso y los días que pasaron",
         t.includes("No te olvides de no olvidarte") &&
-          t.includes("8 días sin abrir RECUERDA"),
+          t.includes("8 días sin abrir AVISPATE"),
         JSON.stringify(t.slice(0, 300)),
       )
       check(
         "I1 · y con la abeja de emoji",
         JSON.stringify(
-          m.storage("recuerda.notifications.v1")?.[0] || {},
+          m.storage("avispate.notifications.v1")?.[0] || {},
         ).includes("🐝"),
-        JSON.stringify(m.storage("recuerda.notifications.v1")?.slice(0, 1)),
+        JSON.stringify(m.storage("avispate.notifications.v1")?.slice(0, 1)),
       )
       check(
         "I1 · sale como notificación del navegador cuando el permiso está concedido",
@@ -557,13 +557,13 @@ const plano = (el) =>
       check(
         "I1 · la visita queda marcada y el aviso anotado",
         (() => {
-          const v = m.raw("recuerda.ultimaVisita.v1")
-          const a = m.raw("recuerda.avisosInactividad.v1")
+          const v = m.raw("avispate.ultimaVisita.v1")
+          const a = m.raw("avispate.avisosInactividad.v1")
           return (
             !!v && Math.abs(Date.now() - new Date(v).getTime()) < 60000 && !!a
           )
         })(),
-        `${m.raw("recuerda.ultimaVisita.v1")} | ${m.raw("recuerda.avisosInactividad.v1")}`,
+        `${m.raw("avispate.ultimaVisita.v1")} | ${m.raw("avispate.avisosInactividad.v1")}`,
       )
       check(
         "I1 · sin errores de ejecución",
@@ -573,7 +573,7 @@ const plano = (el) =>
 
       // b) sin hueco: quien entra todos los días no recibe nada.
       const b = mount(
-        sinRecordatorios({ "recuerda.ultimaVisita.v1": hace(0.2) }),
+        sinRecordatorios({ "avispate.ultimaVisita.v1": hace(0.2) }),
         {
           permission: "granted",
         },
@@ -584,15 +584,15 @@ const plano = (el) =>
         "I1 · si la última visita fue hace unas horas no hay aviso",
         !b.txt().includes(FRASE) &&
           b.sent.length === 0 &&
-          b.raw("recuerda.avisosInactividad.v1") === null,
+          b.raw("avispate.avisosInactividad.v1") === null,
       )
 
       // c) el mismo aviso no se repite dos veces en la misma semana.
       const nudgePrevio = hace(2)
       const c = mount(
         sinRecordatorios({
-          "recuerda.ultimaVisita.v1": hace(9),
-          "recuerda.avisosInactividad.v1": nudgePrevio,
+          "avispate.ultimaVisita.v1": hace(9),
+          "avispate.avisosInactividad.v1": nudgePrevio,
         }),
         { permission: "granted" },
       )
@@ -601,15 +601,15 @@ const plano = (el) =>
         "I1 · el aviso no se repite dentro de la semana",
         !c.txt().includes(FRASE) &&
           c.sent.length === 0 &&
-          c.raw("recuerda.avisosInactividad.v1") === nudgePrevio,
-        String(c.raw("recuerda.avisosInactividad.v1")),
+          c.raw("avispate.avisosInactividad.v1") === nudgePrevio,
+        String(c.raw("avispate.avisosInactividad.v1")),
       )
 
       // d) si el aviso anterior ya quedó viejo (más de una semana), vuelve a salir.
       const d = mount(
         sinRecordatorios({
-          "recuerda.ultimaVisita.v1": hace(20),
-          "recuerda.avisosInactividad.v1": hace(10),
+          "avispate.ultimaVisita.v1": hace(20),
+          "avispate.avisosInactividad.v1": hace(10),
         }),
         { permission: "granted" },
       )
@@ -622,13 +622,13 @@ const plano = (el) =>
       )
       check(
         "I1 · contando los días reales del hueco",
-        d.txt().includes("20 días sin abrir RECUERDA"),
+        d.txt().includes("20 días sin abrir AVISPATE"),
         JSON.stringify(d.txt().slice(0, 200)),
       )
 
       // e) sin onboarding terminado (usuario nuevo) no hay aviso: primero hay que llegar a la app.
       const e = mount(
-        { "recuerda.ultimaVisita.v1": hace(30), "recuerda.events.v1": "[]" },
+        { "avispate.ultimaVisita.v1": hace(30), "avispate.events.v1": "[]" },
         {
           permission: "granted",
         },
@@ -638,13 +638,13 @@ const plano = (el) =>
         "I1 · a quien todavía no termina el onboarding no le llega",
         !e.txt().includes(FRASE) &&
           e.sent.length === 0 &&
-          e.raw("recuerda.avisosInactividad.v1") === null,
+          e.raw("avispate.avisosInactividad.v1") === null,
         JSON.stringify(e.txt().slice(0, 120)),
       )
 
       // f) con el permiso sin conceder el aviso igual queda escrito en el historial de la app.
       const f = mount(
-        sinRecordatorios({ "recuerda.ultimaVisita.v1": hace(8) }),
+        sinRecordatorios({ "avispate.ultimaVisita.v1": hace(8) }),
         {
           permission: "default",
         },
@@ -672,7 +672,7 @@ const plano = (el) =>
       }
       check(
         "V1 · el pie de Ajustes muestra versión y etapa",
-        m.txt().includes("RECUERDA · V1.5 · Etapa 6"),
+        m.txt().includes("AVISPATE · V1.5 · Etapa 7"),
         JSON.stringify(m.txt().slice(-220)),
       )
       check(
@@ -705,7 +705,7 @@ const plano = (el) =>
       check(
         "V1 · y ya no queda el número suelto de antes",
         !m.html().includes("V1.5 local") &&
-          !m.html().includes("RECUERDA · V1.5<"),
+          !m.html().includes("AVISPATE · V1.5<"),
       )
       check(
         "V1 · sin errores de ejecución",
@@ -717,7 +717,7 @@ const plano = (el) =>
     // e) sin canal Notificación no hay nada que pedir.
     const e = mount(
       seedBase({
-        "recuerda.profiles.v1": JSON.stringify([
+        "avispate.profiles.v1": JSON.stringify([
           {
             ...YO,
             contact: { phone: "+56 9 2222 2222", email: "", accepted: true },

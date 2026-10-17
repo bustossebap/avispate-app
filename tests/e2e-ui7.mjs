@@ -48,10 +48,10 @@ const EMPRESA = {
   channels: { push: false, whatsapp: true, email: true },
 }
 const seed = (extra) => ({
-  "recuerda.onboarding.v1": "1",
-  "recuerda.profiles.v1": JSON.stringify([YO]),
-  "recuerda.activeProfile.v1": "yo",
-  "recuerda.reloj.v1": "24",
+  "avispate.onboarding.v1": "1",
+  "avispate.profiles.v1": JSON.stringify([YO]),
+  "avispate.activeProfile.v1": "yo",
+  "avispate.reloj.v1": "24",
   ...extra,
 })
 
@@ -63,7 +63,7 @@ const { check, finish } = reporter()
 {
   const m = mount(
     seed({
-      "recuerda.events.v1": JSON.stringify([
+      "avispate.events.v1": JSON.stringify([
         evento("r1", "yo", "Cambio de aceite", "Auto"),
       ]),
     }),
@@ -185,7 +185,7 @@ const { check, finish } = reporter()
   check(
     "C1 · la mascota de la app es la abeja del saludo (la avispa dibujada se fue con la tarjeta de Tips)",
     m.txt().includes("¡Avíspate! 🐝") &&
-      !bundle.includes("Sácale más partido a RECUERDA") &&
+      !bundle.includes("Sácale más partido a AVISPATE") &&
       !css.includes("buzz"),
   )
   check(
@@ -460,7 +460,7 @@ const { check, finish } = reporter()
 // ------------------------------------------- P1) extensión de país del número de WhatsApp
 {
   const m = mount(
-    seed({ "recuerda.profiles.v1": JSON.stringify([YO, ABUELA]) }),
+    seed({ "avispate.profiles.v1": JSON.stringify([YO, ABUELA]) }),
   )
   await wait(150)
   await m.irAjustes()
@@ -575,7 +575,7 @@ const { check, finish } = reporter()
 // ------------------------------------------- U1) los canales de CADA usuario, en las dos listas
 {
   const perfiles = [YO, ABUELA, EMPRESA]
-  const m = mount(seed({ "recuerda.profiles.v1": JSON.stringify(perfiles) }))
+  const m = mount(seed({ "avispate.profiles.v1": JSON.stringify(perfiles) }))
   await wait(150)
   // Las etiquetas de las insignias: dicen de quién son y si están encendidas. La campana ya no es una
   // insignia —las notificaciones del navegador no son un canal del usuario, son de este dispositivo— y
@@ -721,7 +721,7 @@ const { check, finish } = reporter()
 {
   const m = mount(
     seed({
-      "recuerda.profiles.v1": JSON.stringify([
+      "avispate.profiles.v1": JSON.stringify([
         { ...YO, apple: { connected: true, syncAll: false } },
       ]),
     }),
@@ -884,7 +884,7 @@ const { check, finish } = reporter()
   // (dejarlos sin categoría o borrarlos) y se ve el número real en el aviso.
   const m = mount(
     seed({
-      "recuerda.events.v1": JSON.stringify([
+      "avispate.events.v1": JSON.stringify([
         evento("c-hogar", "yo", "Cortar el pasto", "Hogar"),
         evento("c-auto", "yo", "Cambio de aceite", "Auto"),
       ]),
@@ -892,7 +892,7 @@ const { check, finish } = reporter()
   )
   await wait(150)
   const chip = (t) => m.find("#root button", t)
-  const cats = () => m.storage("recuerda.categorias.v1") || []
+  const cats = () => m.storage("avispate.categorias.v1") || []
   const hojaNueva = () => m.byLabel("Cerrar la nueva categoría")
   const campo = () => m.doc.getElementById("category-name")
   const botonCrear = () => m.find("button", "Crear categoría")
@@ -1043,10 +1043,10 @@ const { check, finish } = reporter()
   check(
     "CAT · «dejarlos sin categoría» borra la categoría y deja el recordatorio sin categoría",
     !cats().some((c) => c.name === "Hogar") &&
-      (m.storage("recuerda.events.v1") || []).some(
+      (m.storage("avispate.events.v1") || []).some(
         (e) => e.name === "Cortar el pasto" && e.category === "",
       ),
-    JSON.stringify(m.storage("recuerda.events.v1")),
+    JSON.stringify(m.storage("avispate.events.v1")),
   )
   check("CAT · el carrusel ya no trae Hogar", !chip("🏠 Hogar"))
   // Eliminar borrando también sus recordatorios.
@@ -1057,10 +1057,10 @@ const { check, finish } = reporter()
   check(
     "CAT · «borrar sus recordatorios» se lleva la categoría y sus recordatorios",
     !cats().some((c) => c.name === "Auto") &&
-      !(m.storage("recuerda.events.v1") || []).some(
+      !(m.storage("avispate.events.v1") || []).some(
         (e) => e.name === "Cambio de aceite",
       ),
-    JSON.stringify((m.storage("recuerda.events.v1") || []).map((e) => e.name)),
+    JSON.stringify((m.storage("avispate.events.v1") || []).map((e) => e.name)),
   )
   m.press(m.byLabel("Cerrar el editor de categorías"))
   await wait(60)
@@ -1084,7 +1084,7 @@ const { check, finish } = reporter()
   m.press(m.doc.querySelector('[aria-label="Nuevo recordatorio"]'))
   await wait(80)
   const chip = (t) => m.find("#root button", t)
-  const cats = () => m.storage("recuerda.categorias.v1") || []
+  const cats = () => m.storage("avispate.categorias.v1") || []
   check(
     "CAT2 · el formulario de Nuevo recordatorio también ofrece crear una categoría",
     !!chip("＋ Nueva") && !!chip("🚗 Auto"),
@@ -1113,13 +1113,13 @@ const { check, finish } = reporter()
   await wait(150)
   check(
     "CAT2 · y el recordatorio se guarda con esa categoría y su emoji",
-    (m.storage("recuerda.events.v1") || []).some(
+    (m.storage("avispate.events.v1") || []).some(
       (e) =>
         e.name === "Vacuna" &&
         e.category === "Mascotas" &&
         e.categoryEmoji === "🍕",
     ),
-    JSON.stringify(m.storage("recuerda.events.v1")),
+    JSON.stringify(m.storage("avispate.events.v1")),
   )
   check(
     "CAT2 · sin errores de ejecución",
@@ -1263,7 +1263,7 @@ const { check, finish } = reporter()
   await wait(60)
   check(
     "F2 · el usuario nuevo queda con su emoji",
-    (m.storage("recuerda.profiles.v1") || []).find((p) => p.name === "Taller")
+    (m.storage("avispate.profiles.v1") || []).find((p) => p.name === "Taller")
       ?.emoji === "🏢",
   )
   // Y el alta sin tocar la cara: la rejilla arranca con la abeja marcada y ese es el emoji que queda.
@@ -1286,10 +1286,10 @@ const { check, finish } = reporter()
   await wait(60)
   check(
     "F2 · y un usuario nuevo sin elegir cara queda con la abeja",
-    (m.storage("recuerda.profiles.v1") || []).find((p) => p.name === "Sin cara")
+    (m.storage("avispate.profiles.v1") || []).find((p) => p.name === "Sin cara")
       ?.emoji === "🐝",
     JSON.stringify(
-      (m.storage("recuerda.profiles.v1") || []).find(
+      (m.storage("avispate.profiles.v1") || []).find(
         (p) => p.name === "Sin cara",
       ),
     ),
@@ -1456,7 +1456,7 @@ const { check, finish } = reporter()
     ...evento("n3", "yo", "Renovar pasaporte"),
     recurrence: "Cada 5 años",
   }
-  const m = mount(seed({ "recuerda.events.v1": JSON.stringify([viejo]) }))
+  const m = mount(seed({ "avispate.events.v1": JSON.stringify([viejo]) }))
   await wait(150)
   m.clickText("p", "Renovar pasaporte")
   await wait(60)
@@ -1495,7 +1495,7 @@ const { check, finish } = reporter()
   check(
     "T1 · la sección de Tips ya no está: ni el título ni la tarjeta, solo el botón",
     !/Tips/.test(m.txt()) &&
-      !m.txt().includes("Sácale más partido a RECUERDA") &&
+      !m.txt().includes("Sácale más partido a AVISPATE") &&
       !m.txt().includes("Consejos cortos") &&
       (verTips()?.className || "").includes("w-full"),
     JSON.stringify(m.txt().slice(-260)),
@@ -1509,7 +1509,7 @@ const { check, finish } = reporter()
     !!tipsScreen() &&
       !(tipsScreen().className || "").includes("app-bg") &&
       !(tipsScreen().className || "").includes("amber") &&
-      m.txt().includes("Tips de RECUERDA"),
+      m.txt().includes("Tips de AVISPATE"),
     tipsScreen()?.className,
   )
   check(
@@ -1620,7 +1620,7 @@ check(
 check(
   "D · la tarjeta de Tips se fue con su avispa y su zumbido; queda el botón",
   !css.includes("buzz") &&
-    !bundle.includes("Sácale más partido a RECUERDA") &&
+    !bundle.includes("Sácale más partido a AVISPATE") &&
     !bundle.includes("Consejos cortos") &&
     bundle.includes("Ver tips"),
 )
@@ -1634,7 +1634,7 @@ check(
 )
 check(
   "D · las categorías propias traen su clave, sus dos hojas y sus dos salidas al eliminar",
-  bundle.includes("recuerda.categorias.v1") &&
+  bundle.includes("avispate.categorias.v1") &&
     bundle.includes("Editar categorías") &&
     bundle.includes("＋ Nueva") &&
     bundle.includes("Dejarlos sin categoría") &&
@@ -1648,8 +1648,8 @@ check(
   bundle.includes("Cada 5 años") && bundle.includes("Cada 10 años"),
 )
 check(
-  "D · la entrega en curso es la Etapa 6",
-  bundle.includes("Etapa 6") && !bundle.includes("Etapa 5"),
+  "D · la entrega en curso es la Etapa 7",
+  bundle.includes("Etapa 7") && !bundle.includes("Etapa 6"),
 )
 
 process.exit(finish() ? 1 : 0)

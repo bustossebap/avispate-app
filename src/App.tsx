@@ -90,32 +90,33 @@ interface AppNotification {
   status: "Enviado" | "Completado"
 }
 
-const STORAGE_EVENTS = "recuerda.events.v1"
-const STORAGE_NOTIFICATIONS = "recuerda.notifications.v1"
-const STORAGE_ONBOARDING = "recuerda.onboarding.v1"
-const STORAGE_DARK = "recuerda.dark.v1"
-const STORAGE_PROFILES = "recuerda.profiles.v1"
-const STORAGE_ACTIVE_PROFILE = "recuerda.activeProfile.v1"
+const STORAGE_EVENTS = "avispate.events.v1"
+const STORAGE_NOTIFICATIONS = "avispate.notifications.v1"
+const STORAGE_ONBOARDING = "avispate.onboarding.v1"
+const STORAGE_DARK = "avispate.dark.v1"
+const STORAGE_PROFILES = "avispate.profiles.v1"
+const STORAGE_ACTIVE_PROFILE = "avispate.activeProfile.v1"
 // Formato de hora elegido en Ajustes: "12" (a.m./p.m.) o "24" (24 horas). Es una preferencia del
 // dispositivo, como el modo oscuro; sin elección guardada se respeta lo que prefiera el sistema.
-const STORAGE_CLOCK = "recuerda.reloj.v1"
+const STORAGE_CLOCK = "avispate.reloj.v1"
 // Categorías propias del dispositivo: la lista que alimenta el carrusel de Inicio y el selector de
 // Nuevo recordatorio. Si no hay nada guardado se usan las de siempre, así nadie pierde las suyas al
 // actualizar; borrar una categoría no toca los recordatorios (se decide en la hoja de edición).
-const STORAGE_CATEGORIES = "recuerda.categorias.v1"
+const STORAGE_CATEGORIES = "avispate.categorias.v1"
 // Versión visible: un solo lugar para el número y la entrega, así la pantalla y el README no se
 // contradicen. La V1.5 es la versión del producto; las etapas son las entregas de trabajo dentro de
 // ella (1: cada usuario con lo suyo · 2: hora propia y logos reales · 3: onboarding con deslizar,
 // canales a la vista y ticket de contacto · 4: hora estable, Google por usuario e inactividad ·
 // 5: emoji propio en todas partes y sincronización con Apple Calendar y Outlook · 6: la avispa de
-// Inicio, la foto de usuario, repetir por horas, la extensión del número y los tips).
+// Inicio, la foto de usuario, repetir por horas, la extensión del número y los tips · 7: el renombre
+// de RECUERDA a AVISPATE, con sus claves guardadas renombradas y migradas).
 const APP_VERSION = "V1.5"
-const APP_STAGE = "Etapa 6"
+const APP_STAGE = "Etapa 7"
 // Uso de la app: se guarda la última visita para poder avisar —una sola vez por hueco— cuando alguien
-// vuelve después de una semana o más sin abrir RECUERDA. Es el único aviso que no depende de un
+// vuelve después de una semana o más sin abrir AVISPATE. Es el único aviso que no depende de un
 // recordatorio, así que vive aparte con su propia clave.
-const STORAGE_LAST_SEEN = "recuerda.ultimaVisita.v1"
-const STORAGE_INACTIVITY = "recuerda.avisosInactividad.v1"
+const STORAGE_LAST_SEEN = "avispate.ultimaVisita.v1"
+const STORAGE_INACTIVITY = "avispate.avisosInactividad.v1"
 const INACTIVITY_DAYS = 7
 const INACTIVITY_MESSAGE = "Bzzt… no te olvides de no olvidarte, ¡avíspate!"
 // Claves de la V1.5, cuando el contacto y Google Calendar eran un único dato global. Ahora viven
@@ -123,6 +124,26 @@ const INACTIVITY_MESSAGE = "Bzzt… no te olvides de no olvidarte, ¡avíspate!"
 // Van juntas y arriba a propósito: la migración las usa apenas arranca el módulo.
 const LEGACY_CONTACT = "recuerda.contacto.v1"
 const LEGACY_GCAL = "recuerda.gcal.v1"
+// Marca de "este aviso ya salió" (avispate.sent.<recordatorio>:<aviso>:<fecha>). Lleva prefijo propio
+// porque son claves sueltas que se crean y se borran con los avisos, no una lista guardada.
+const SENT_PREFIX = "avispate.sent."
+// Renombre RECUERDA → AVISPATE: las claves guardadas cambiaron de nombre, así que lo que hubiera en las
+// viejas se copia a las nuevas una sola vez (ver migrateRenamedKeys). El destino de cada par se escribe
+// con las constantes de arriba —una sola fuente de verdad— y las dos de la V1.5 (contacto/gcal) no van
+// acá: son el nombre de una versión pasada, no la marca, y su propia migración las sigue leyendo igual.
+const RENAMED_KEYS: Array<[string, string]> = [
+  ["recuerda.events.v1", STORAGE_EVENTS],
+  ["recuerda.notifications.v1", STORAGE_NOTIFICATIONS],
+  ["recuerda.onboarding.v1", STORAGE_ONBOARDING],
+  ["recuerda.dark.v1", STORAGE_DARK],
+  ["recuerda.profiles.v1", STORAGE_PROFILES],
+  ["recuerda.activeProfile.v1", STORAGE_ACTIVE_PROFILE],
+  ["recuerda.reloj.v1", STORAGE_CLOCK],
+  ["recuerda.categorias.v1", STORAGE_CATEGORIES],
+  ["recuerda.ultimaVisita.v1", STORAGE_LAST_SEEN],
+  ["recuerda.avisosInactividad.v1", STORAGE_INACTIVITY],
+]
+const RENAMED_SENT_PREFIX = "recuerda.sent."
 
 const DEFAULT_PROFILE_ID = "yo"
 const DEFAULT_PROFILE: Profile = {
@@ -131,7 +152,7 @@ const DEFAULT_PROFILE: Profile = {
   emoji: "🐝",
 }
 // Las caras de la rejilla. La abeja va primera porque es la cara por defecto de un usuario nuevo —es la
-// mascota de RECUERDA— y el smiley queda al final, con las demás.
+// mascota de AVISPATE— y el smiley queda al final, con las demás.
 const PROFILE_EMOJIS = [
   "🐝",
   "👨",
@@ -226,7 +247,7 @@ const EMOJI_GROUPS: { tab: string ;name: string ;emojis: string[] }[] = [
 
 // Extensión de país del número de WhatsApp: en vez de escribir el "+56" a mano (y equivocarse), se
 // elige de una lista corta que cubre Chile —el predeterminado— y los países donde vive la familia
-// RECUERDA. El número se sigue guardando completo ("+56 9 1234 5678") dentro del contacto del
+// AVISPATE. El número se sigue guardando completo ("+56 9 1234 5678") dentro del contacto del
 // usuario, así el mismo dato sirve para el ticket, los avisos y lo ya guardado en versiones anteriores.
 // Cada país lleva su bandera: el cuadro de la extensión quedó chico —una bandera y nada más— para
 // dejarle el ancho al número, así que la bandera es lo que se ve y el nombre (+56 Chile) se lee al
@@ -537,18 +558,22 @@ const STATUS_CONFIG: Record<Status, {
   },
 }
 
-const ATTACHMENT_DB = "recuerda.attachments.v1"
+const ATTACHMENT_DB = "avispate.attachments.v1"
+// Nombre viejo de la base de adjuntos (la de RECUERDA). Lo guardado ahí no se pierde ni se copia en
+// bloque al arrancar —son archivos, y eso sí bloquearía la app—: cada adjunto que se pide y no está en
+// la base nueva se lee de la vieja y se copia en ese momento (copia perezosa, ver getAttachment).
+const LEGACY_ATTACHMENT_DB = "recuerda.attachments.v1"
 const ATTACHMENT_STORE = "files"
 
-function openAttachmentDB(): Promise<IDBDatabase> {
+function openAttachmentDB(name = ATTACHMENT_DB): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
-    const req = indexedDB.open(ATTACHMENT_DB, 1)
+    const req = indexedDB.open(name, 1)
     req.onupgradeneeded = () => req.result.createObjectStore(ATTACHMENT_STORE)
     req.onsuccess = () => resolve(req.result)
     req.onerror = () => reject(req.error)
   })
 }
-async function saveAttachment(id: string, file: File) {
+async function saveAttachment(id: string, file: Blob) {
   const db = await openAttachmentDB()
   await new Promise<void>((resolve, reject) => {
     const tx = db.transaction(ATTACHMENT_STORE, "readwrite")
@@ -558,9 +583,11 @@ async function saveAttachment(id: string, file: File) {
   })
   db.close()
 }
-async function getAttachment(id: string): Promise<Blob | null> {
+// Lee un adjunto de una base concreta y no falla nunca: si la base no está o el archivo no existe,
+// devuelve null (para quien pregunta, "no lo tengo" y "no pude abrirlo" se resuelven igual).
+async function readAttachment(dbName: string, id: string): Promise<Blob | null> {
   try {
-    const db = await openAttachmentDB()
+    const db = await openAttachmentDB(dbName)
     const result = await new Promise<Blob | null>((resolve, reject) => {
       const tx = db.transaction(ATTACHMENT_STORE, "readonly")
       const req = tx.objectStore(ATTACHMENT_STORE).get(id)
@@ -572,6 +599,16 @@ async function getAttachment(id: string): Promise<Blob | null> {
   } catch {
     return null
   }
+}
+async function getAttachment(id: string): Promise<Blob | null> {
+  const propio = await readAttachment(ATTACHMENT_DB, id)
+  if (propio) return propio
+  // Copia perezosa de la base vieja: el adjunto se sirve igual y queda en la base nueva para la próxima
+  // vez, así el renombre no deja ninguna foto ni nota de voz sin abrir.
+  const viejo = await readAttachment(LEGACY_ATTACHMENT_DB, id)
+  if (!viejo) return null
+  await saveAttachment(id, viejo)
+  return viejo
 }
 async function deleteAttachment(id: string) {
   try {
@@ -756,6 +793,42 @@ function patchDefaultProfile(
   return prev.map((p, index) => (index === i ? { ...p, ...patch } : p))
 }
 
+// Renombre RECUERDA → AVISPATE: las claves guardadas cambiaron de nombre, así que lo que hubiera en las
+// viejas se copia a las nuevas una sola vez y la vieja se borra —solo después de comprobar que la copia
+// quedó bien— para que nadie pierda sus recordatorios, usuarios ni categorías. Corre antes de la
+// migración de la V1.5, que escribe en las claves nuevas (las suyas son históricas y no cambian).
+function migrateRenamedKeys() {
+  try {
+    for (const [viejo, nuevo] of RENAMED_KEYS) {
+      const guardado = localStorage.getItem(viejo)
+      if (guardado === null) continue
+      if (localStorage.getItem(nuevo) === null) {
+        localStorage.setItem(nuevo, guardado)
+        // Solo se borra la vieja si la copia quedó idéntica: si no (cuota llena, por ejemplo), se deja
+        // para reintentarla en la próxima apertura en vez de perder el dato.
+        if (localStorage.getItem(nuevo) !== guardado) continue
+      }
+      // Si la clave nueva ya tenía datos propios, mandan esos y la vieja es obsoleta: se borra igual,
+      // para no dejar dos fuentes de verdad.
+      localStorage.removeItem(viejo)
+    }
+    // Los avisos ya enviados son claves sueltas (avispate.sent.<recordatorio>:<aviso>:<fecha>), así que
+    // se recogen primero por prefijo y recién después se renombran: borrar mientras se recorre mueve el
+    // índice y dejaría claves sin pasar.
+    const enviados: string[] = []
+    for (let i = 0; i < localStorage.length; i++) {
+      const clave = localStorage.key(i)
+      if (clave && clave.startsWith(RENAMED_SENT_PREFIX)) enviados.push(clave)
+    }
+    for (const viejo of enviados) {
+      const guardado = localStorage.getItem(viejo)
+      if (guardado === null) continue
+      localStorage.setItem(SENT_PREFIX + viejo.slice(RENAMED_SENT_PREFIX.length), guardado)
+      localStorage.removeItem(viejo)
+    }
+  } catch {}
+}
+
 function migrateLegacyProfileSettings() {
   try {
     const legacyContact = localStorage.getItem(LEGACY_CONTACT)
@@ -778,8 +851,10 @@ function migrateLegacyProfileSettings() {
     localStorage.removeItem(LEGACY_GCAL)
   } catch {}
 }
-// Se corre una vez al cargar el módulo, antes de que la app se dibuje, para que Ajustes, Crear y el
+// Se corren una vez al cargar el módulo, antes de que la app se dibuje: primero el renombre de las
+// claves (RECUERDA → AVISPATE) y después la migración de la V1.5, para que Ajustes, Crear y el
 // onboarding lean desde el primer render los datos ya repartidos por usuario.
+migrateRenamedKeys()
 migrateLegacyProfileSettings()
 const HOUR_OFFSET = 1 / 24 // "1 hora antes" expresado en días
 // Selector "Avísame": 90 / 30 / 14 / 7 días, 1 día y 1 hora antes.
@@ -904,7 +979,7 @@ function CameraIcon({ className = "w-4 h-4" }: { className?: string }) {
   )
 }
 
-// (La avispa dibujada que ilustraba la tarjeta de Tips se fue con esa tarjeta: la mascota de RECUERDA
+// (La avispa dibujada que ilustraba la tarjeta de Tips se fue con esa tarjeta: la mascota de AVISPATE
 // sigue siendo la abeja del saludo «¡Avíspate!», que es un emoji, no un dibujo propio.)
 
 // La cara de un usuario en la app: su foto si la tiene, si no su emoji. Se usa en el inicio, en las
@@ -1115,7 +1190,7 @@ function icsEscape(text: string) {
 }
 // Enlace que abre Google Calendar con el evento ya rellenado: solo hay que confirmar y guardar.
 function googleCalendarUrl(event: Reminder) {
-  const details = [event.notes, `Recordatorio de RECUERDA · ${event.category}`]
+  const details = [event.notes, `Recordatorio de AVISPATE · ${event.category}`]
     .filter(Boolean)
     .join("\n")
   const params = new URLSearchParams({
@@ -1167,10 +1242,10 @@ function icsVeventLines(event: Reminder, stamp: string) {
 const ICS_HEAD = [
   "BEGIN:VCALENDAR",
   "VERSION:2.0",
-  "PRODID:-//RECUERDA//Recordatorios//ES",
+  "PRODID:-//AVISPATE//Recordatorios//ES",
   "CALSCALE:GREGORIAN",
   "METHOD:PUBLISH",
-  "X-WR-CALNAME:RECUERDA",
+  "X-WR-CALNAME:AVISPATE",
 ]
 function icsStamp() {
   return new Date().toISOString().replace(/[-:]/g, "").split(".")[0]
@@ -1238,7 +1313,7 @@ function outlookEnd(date: string, time: string) {
 // Enlace que abre Outlook con el evento ya rellenado: los mismos parámetros que usa su propio botón
 // «Agregar al calendario» (path, rru, subject, startdt, enddt, body, allday).
 function outlookCalendarUrl(event: Reminder) {
-  const body = [event.notes, `Recordatorio de RECUERDA · ${event.category}`]
+  const body = [event.notes, `Recordatorio de AVISPATE · ${event.category}`]
     .filter(Boolean)
     .join("\n")
   const params = new URLSearchParams({
@@ -3546,7 +3621,7 @@ function HomeScreen({
     events.filter((e) => e.category === nombre).length
   const [newUserName, setNewUserName] = useState("")
   // La cara del usuario nuevo se elige de la misma manera que en el onboarding y en Ajustes: emoji de
-  // la rejilla o foto con la cámara; arranca en la abeja (la cara por defecto, la mascota de RECUERDA)
+  // la rejilla o foto con la cámara; arranca en la abeja (la cara por defecto, la mascota de AVISPATE)
   // para que agregar a alguien de apuro pida solo el nombre.
   const [newUserEmoji, setNewUserEmoji] = useState(DEFAULT_PROFILE.emoji)
   const [newUserPhoto, setNewUserPhoto] = useState("")
@@ -6087,7 +6162,7 @@ function SettingsScreen({
         ? "Bloqueado en el navegador"
         : "Aún no concedido"
   const permissionNote = !notifSupported
-    ? "En iPhone, primero agrega RECUERDA a la pantalla de inicio: solo así Safari admite avisos."
+    ? "En iPhone, primero agrega AVISPATE a la pantalla de inicio: solo así Safari admite avisos."
     : permission === "granted"
       ? "Los recordatorios cuyo dueño tiene encendido el canal Notificación avisan en este dispositivo."
       : permission === "denied"
@@ -6577,7 +6652,7 @@ function SettingsScreen({
                   className="mt-0.5 w-4 h-4 flex-shrink-0 accent-amber-600"
                 />
                 <span className="text-[12px] text-stone-600 dark:text-stone-300 leading-snug">
-                  Acepto que RECUERDA use estos datos para avisarme por WhatsApp
+                  Acepto que AVISPATE use estos datos para avisarme por WhatsApp
                   y por correo. Son míos y puedo cambiarlos cuando quiera.
                 </span>
               </label>
@@ -6903,7 +6978,7 @@ function SettingsScreen({
           Ver tips
         </button>
         <p className="text-center text-[11px] text-stone-300 dark:text-stone-500 mt-8">
-          RECUERDA · {APP_VERSION} · {APP_STAGE}
+          AVISPATE · {APP_VERSION} · {APP_STAGE}
         </p>
       </div>
     </div>
@@ -6993,7 +7068,7 @@ function TipsScreen({ onClose }: { onClose: () => void }) {
     <div className="flex flex-col h-full tips-bg text-white">
       <div className="flex items-center justify-between px-5 pt-12 pb-1">
         <span className="text-[11px] font-bold uppercase tracking-[0.18em] text-white/60">
-          Tips de RECUERDA
+          Tips de AVISPATE
         </span>
         <button
           onClick={onClose}
@@ -7496,7 +7571,7 @@ export default function App() {
     )
     doomed.forEach((e) =>
       Object.keys(localStorage).forEach((k) => {
-        if (k.startsWith("recuerda.sent.") && k.includes(`${e.id}:`))
+        if (k.startsWith(SENT_PREFIX) && k.includes(`${e.id}:`))
           localStorage.removeItem(k)
       }),
     )
@@ -7558,7 +7633,7 @@ export default function App() {
     try {
       localStorage.setItem(STORAGE_INACTIVITY, new Date().toISOString())
     } catch {}
-    const message = `${INACTIVITY_MESSAGE} Llevas ${Math.floor(days)} días sin abrir RECUERDA.`
+    const message = `${INACTIVITY_MESSAGE} Llevas ${Math.floor(days)} días sin abrir AVISPATE.`
     setNotifications((prev) => [
       {
         id: uid(),
@@ -7574,11 +7649,11 @@ export default function App() {
       ...prev,
     ])
     if ("Notification" in window && Notification.permission === "granted")
-      new Notification("RECUERDA · Avíspate 🐝", { body: INACTIVITY_MESSAGE })
+      new Notification("AVISPATE · Avíspate 🐝", { body: INACTIVITY_MESSAGE })
   }, [activeProfileId])
 
   // Última visita: se marca al abrir y cada vez que la app pasa a segundo plano o se cierra, para que
-  // el aviso de inactividad mida tiempo sin usar RECUERDA y no tiempo sin abrirla.
+  // el aviso de inactividad mida tiempo sin usar AVISPATE y no tiempo sin abrirla.
   useEffect(() => {
     const touch = () => {
       try {
@@ -7621,7 +7696,7 @@ export default function App() {
             const offset = alert.offset
             if (!alertDueAt(eventAt, offset, now)) return
             const key = `${e.id}:${alert.id}:${dateKey()}`
-            if (localStorage.getItem(`recuerda.sent.${key}`)) return
+            if (localStorage.getItem(`${SENT_PREFIX}${key}`)) return
             // El aviso sale por los canales que el DUEÑO del recordatorio tiene listos: si a ese usuario
             // todavía no le configuraron WhatsApp o correo, sale por notificación; si apagó del todo las
             // notificaciones y no tiene ningún canal, no hay nada que enviar (y no se marca como
@@ -7632,7 +7707,7 @@ export default function App() {
               ) ?? DEFAULT_PROFILE
             const delivery = deliveryChannels(e, owner)
             if (!delivery.length) return
-            localStorage.setItem(`recuerda.sent.${key}`, "1")
+            localStorage.setItem(`${SENT_PREFIX}${key}`, "1")
             const message = `${e.name} vence ${
               offset === 0 ? "hoy" : `en ${alert.label}`
             }.`
@@ -7660,7 +7735,7 @@ export default function App() {
               "Notification" in window &&
               Notification.permission === "granted"
             )
-              new Notification("RECUERDA · Recordatorio", { body: message })
+              new Notification("AVISPATE · Recordatorio", { body: message })
           })
         })
     }

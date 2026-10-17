@@ -8,7 +8,7 @@ const { check, finish } = reporter()
 // El ajuste de Google Calendar se guarda con la clave global de la V1.5 a propósito: así este recorrido
 // también comprueba que la migración se lo lleva al usuario "yo".
 const m = montar(bundle, {
-  "recuerda.onboarding.v1": "1",
+  "avispate.onboarding.v1": "1",
   "recuerda.gcal.v1": JSON.stringify({ connected: true, syncAll: false }),
 })
 const { doc, txt, click, storage, errors } = m
