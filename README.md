@@ -1,4 +1,4 @@
-# AVISPATE — V1.6 (Etapa 9)
+# AVISPATE — V1.7 (Etapa 10)
 
 Primera transformación del prototipo de Figma Make a una V1 funcional ejecutable como aplicación web local.
 
@@ -27,6 +27,8 @@ Primera transformación del prototipo de Figma Make a una V1 funcional ejecutabl
 - Onboarding recordado entre sesiones.
 - Interfaz responsive: teléfono completo en móvil y marco de teléfono en escritorio.
 - Copia de seguridad: todo en un solo `.json` que se descarga y se restaura desde Ajustes › Datos.
+- Avisos con la app cerrada: el teléfono calcula cuándo avisar y lo sube; Supabase guarda la cola y un cron cada minuto manda el push. Con la app cerrada, sin abrirla.
+- Instalable en el teléfono (PWA): íconos propios, se abre sin la barra del navegador y avisa cuando hay una versión nueva.
 
 ## Ejecutar
 
@@ -322,6 +324,49 @@ suite nueva es `tests/e2e-copia.mjs` (23 comprobaciones: descarga, contenido, co
 restauración en pantalla y archivos que no sirven). La app sube a **V1.6** y el pie de Ajustes dice
 `AVISPATE · V1.6 · Etapa 9`.
 
+## Etapa 10: avisos con la app cerrada (y la app instalable)
+
+Hasta acá AVISPATE avisaba **mientras estaba abierta**: el motor local revisa cada minuto, pero si el
+teléfono estaba en el bolsillo y la app cerrada, no había quién avisara. Esta entrega cierra esa
+brecha sin servidor propio y sin costo:
+
+- **AVISPATE instalable.** `public/manifest.webmanifest` con los íconos de la abeja (192, 512 y
+  maskable, generados desde `public/icono.svg`), `theme-color`, `apple-touch-icon` y
+  `viewport-fit=cover`. En Android es *menú ⋮ → Instalar aplicación*; en iPhone, *Compartir → Agregar
+  a pantalla de inicio* (iOS 16.4 o más nuevo; sin App Store ni cuenta de Apple).
+- **El teléfono calcula, el servidor entrega.** Esto es lo importante del diseño: las repeticiones
+  («cada 8 horas», «cada 6 meses») y la zona horaria viven donde ya vivían, en `src/lib/repeticion.ts`.
+  El teléfono arma una **cola de instantes concretos** (`src/lib/cola.ts`) y la sube; Supabase solo
+  mira la hora y manda. Así no hay dos versiones de la misma regla que se contradigan, y no aparece
+  el clásico aviso a las 3 de la mañana al cambiar de país.
+- **La cola cubre 45 días** (hasta 120 avisos por recordatorio y 600 en total). Se recalcula al abrir
+  la app y cada vez que cambian los recordatorios; si alguien no la abre en más de un mes, los avisos
+  de ese hueco no existen (el aviso local sigue igual).
+- **Un service worker propio** (`src/pwa/service-worker.js`, 4 kB, sin Workbox): guarda el armado para
+  abrir sin red, recibe el push y abre la app al tocar la notificación. `vite.config.ts` lo publica
+  como `sw.js` con el sello de la entrega; una versión nueva **espera** —píldora «Hay una versión
+  nueva · Actualizar»— en vez de recargar en medio de un formulario.
+- **Ajustes › Avisos con la app cerrada** muestra el estado real (activado, listo para activar, falta
+  conectar la nube, iPhone sin instalar, navegador sin soporte) y tiene *Activar avisos* y *Probar
+  aviso*; la prueba llega en menos de un minuto con la app cerrada.
+
+Del lado del servidor hay una migración (`supabase/migrations/0001_etapa10.sql`) y una Edge Function
+(`supabase/functions/enviar-avisos/`). Las tablas (`dispositivos`, `avisos`) tienen RLS **sin
+políticas**: la clave pública que viaja al navegador no las toca. Solo puede llamar a cuatro funciones
+que exigen el **token del dispositivo** (32 bytes al azar, guardados en ese teléfono). El cron corre
+cada minuto y la función es idempotente: lo enviado no se repite y las suscripciones muertas se borran
+solas. De paso, ese cron mantiene el proyecto gratuito despierto (Supabase pausa tras una semana sin
+actividad).
+
+La puesta en marcha son cinco pasos, una sola vez: **`supabase/README.md`**. Las claves VAPID se
+generan con `node scripts/generar-vapid.mjs`; la privada queda en `.env.local` y en los secretos de
+Supabase, nunca en el repo (no lleva prefijo `VITE_`, así que Vite no la mete en el bundle).
+
+Las suites nuevas son `tests/e2e-cola.mjs` (26 comprobaciones: fechas al minuto, repeticiones, topes,
+orden, ids estables entre aperturas y el `sw.js` publicado) y `tests/e2e-pwa.mjs` (29: manifest, PNG
+del tamaño que dicen, HTML, service worker y la tarjeta de Ajustes). La batería pasa de 627 a **682**.
+La app sube a **V1.7** y el pie de Ajustes dice `AVISPATE · V1.7 · Etapa 10`.
+
 ## Etapas anteriores y numeración
 
 La app dijo **V1.5** desde la entrega de avisos múltiples, notas de voz y cámara hasta la Etapa 8. Sobre esa versión se fueron sumando entregas de trabajo que no cambiaban el número; la Etapa 9 —la copia de seguridad, la primera función nueva después de la V1.5— lo sube a **V1.6**:
@@ -338,16 +383,17 @@ La app dijo **V1.5** desde la entrega de avisos múltiples, notas de voz y cáma
 | Etapa 7 | El renombre RECUERDA → AVISPATE: la marca en toda la app y en la pestaña del navegador, las claves guardadas renombradas con su migración (recordatorios, usuarios, categorías, ajustes, avisos enviados y contacto intactos) y la copia perezosa de los adjuntos de IndexedDB |
 | Etapa 8 | Publicación en `avispate-app.vercel.app` (sin protección de despliegues), el arreglo de la batería en vivo con `base: "./"` y el robot de GitHub Actions |
 | Etapa 9 | Copia de seguridad: descargar todo en un `.json` —fotos y notas de voz en base64— y restaurarlo desde Ajustes › Datos, con resumen antes de reemplazar |
+| Etapa 10 | Avisos con la app cerrada (cola calculada en el teléfono + Supabase + cron + Edge Function), AVISPATE instalable con service worker propio y píldora de versión nueva |
 
-Desde la Etapa 9 la app dice **V1.6** (el pie de Ajustes: `AVISPATE · V1.6 · Etapa 9`). Las próximas
+Desde la Etapa 10 la app dice **V1.7** (el pie de Ajustes: `AVISPATE · V1.7 · Etapa 10`). Las próximas
 entregas vuelven a numerarse como etapas dentro de la misma versión; lo razonable es subir a **V2.0**
-cuando llegue el backend con el envío real por WhatsApp y correo.
+cuando llegue el envío real por WhatsApp y correo.
 
 ## Preguntas sobre el permiso de notificaciones y el aviso de inactividad
 
 **¿Se puede dejar el permiso de notificaciones activado por defecto?** No. Quien decide es el navegador, no la app: el permiso empieza en `default` (pendiente) y solo pasa a `granted` cuando la persona acepta *su* cartel, que además tiene que venir de un toque del usuario (Chrome, Safari y Firefox ignoran o bloquean las peticiones que no nacen de un gesto). Lo que sí se puede —y ya está hecho— es pedirlo en el mejor momento: al guardar un recordatorio que incluye el canal Notificación, y desde el botón «Activar» de Ajustes. Ojo con iPhone: Safari solo admite avisos si AVISPATE se agregó antes a la pantalla de inicio.
 
-**¿Se puede avisar «llevas una semana sin usar la app»?** En esta versión local sí, pero al abrir la app: al volver después de 7 días o más aparece el aviso «Bzzt… no te olvides de no olvidarte, ¡avíspate!» con los días que pasaron, en el historial de avisos y como notificación del navegador si el permiso está concedido (una sola vez por hueco). Lo que **no** se puede hacer todavía es avisar con la app cerrada: para eso hace falta *push* de verdad, que necesita (1) un servicio de notificaciones en el navegador —permiso, `service worker` y suscripción con llaves VAPID—, (2) un servidor que guarde las suscripciones y (3) algo que despierte ese servidor, por ejemplo un cron. Ese es el paso natural cuando llegue el backend (Supabase —tabla de suscripciones + Edge Function programada— es el camino más corto: el día que haga falta se instala `@supabase/supabase-js`).
+**¿Se puede avisar «llevas una semana sin usar la app»?** En esta versión sí, y de las dos maneras: al abrir la app después de 7 días o más aparece el aviso «Bzzt… no te olvides de no olvidarte, ¡avíspate!» con los días que pasaron, en el historial de avisos y como notificación del navegador si el permiso está concedido (una sola vez por hueco). Y desde la Etapa 10 los recordatorios avisan **con la app cerrada**: el teléfono calcula los instantes (`src/lib/cola.ts`), los sube a Supabase y un cron cada minuto llama a la Edge Function que manda el push. Para eso hace falta el service worker, el permiso del navegador, una suscripción con llaves VAPID y la nube configurada una sola vez (`supabase/README.md`); sin esa configuración la app funciona igual, pero solo avisa mientras está abierta.
 
 ## Preguntas sobre los calendarios y el selector de archivos
 

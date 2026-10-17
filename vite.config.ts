@@ -2,6 +2,8 @@ import { defineConfig, type HtmlTagDescriptor, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import path from 'node:path'
+import { createHash } from 'node:crypto'
+import { readFileSync } from 'node:fs'
 
 import siteConfiguration from './.figma/make/site.json' with { type: 'json' }
 
@@ -28,6 +30,7 @@ export default defineConfig(({ mode, command }) => {
     plugins: [
       react(),
       tailwindcss(),
+      avispateServiceWorker(),
       figmaSiteConfiguration(siteConfiguration),
       figmaErrorOverlayReplay(),
       figmaReactRefreshBoundaryFallback(),
@@ -75,6 +78,32 @@ type FigmaSiteConfiguration = {
   }
   accessibility?: {
     addBypassLinks?: boolean
+  }
+}
+
+/**
+ * Publica el service worker de la Etapa 10 como `sw.js`, con la lista de assets de esta entrega y un
+ * sello que cambia cuando cambian (el service worker lo usa para estrenar caché y borrar la vieja).
+ *
+ * Va acá y no en un paquete aparte porque es una sola página de código: el archivo legible está en
+ * `src/pwa/service-worker.js` y este plugin solo le inyecta lo que únicamente el build sabe.
+ */
+function avispateServiceWorker(): Plugin {
+  return {
+    name: 'avispate-service-worker',
+    apply: 'build',
+    generateBundle(_options, bundle) {
+      const archivos = Object.keys(bundle).filter((f) => /\.(js|css)$/.test(f))
+      const sello = createHash('sha1').update(archivos.join('|')).digest('hex').slice(0, 12)
+      const plantilla = readFileSync(
+        path.join(import.meta.dirname, 'src/pwa/service-worker.js'),
+        'utf8',
+      )
+      const fuente = plantilla
+        .replace(/__SELLO__/g, sello)
+        .replace(/__ARCHIVOS__/g, JSON.stringify(archivos))
+      this.emitFile({ type: 'asset', fileName: 'sw.js', source: fuente })
+    },
   }
 }
 

@@ -10,6 +10,34 @@ import {
   type Copia,
   type RespuestaCopia,
 } from "./lib/copia"
+import {
+  HOUR_OFFSET,
+  PRESET_OFFSETS,
+  alertLabel,
+  alertToDays,
+  offsetLabel,
+  unitText,
+} from "./lib/avisos"
+import { programarAvisos } from "./lib/cola"
+import { pedirAvisoDePrueba, sincronizarCola } from "./lib/nube"
+import {
+  activarAvisos,
+  activarVersionNueva,
+  desactivarAvisos,
+  esInstalada,
+  estadoAvisos,
+  pushAnotado,
+  registrarSW,
+  vigilarVersionNueva,
+  type EstadoAvisos,
+} from "./lib/pwa"
+import {
+  addMonthsSafe,
+  addYearsSafe,
+  nextOccurrenceAt,
+  pad2,
+  parseDate,
+} from "./lib/repeticion"
 
 // Los modales de la app (la hoja de emojis y la foto) se dibujan con un portal dentro del marco de la
 // app —el `div` con id `app-frame`— y no dentro del formulario que los abre. Motivo: cualquier ancestro
@@ -121,14 +149,19 @@ const STORAGE_CATEGORIES = "avispate.categorias.v1"
 // Inicio, la foto de usuario, repetir por horas, la extensión del número y los tips · 7: el renombre
 // de RECUERDA a AVISPATE, con sus claves guardadas renombradas y migradas · 8: la app publicada en
 // avispate-app.vercel.app y la batería en vivo arreglada (los assets con `./`) · 9: la copia de
-// seguridad, que saca y devuelve todo en un .json).
-const APP_VERSION = "V1.6"
-const APP_STAGE = "Etapa 9"
+// seguridad, que saca y devuelve todo en un .json · 10: los avisos con la app cerrada (push + nube de
+// Supabase) y AVISPATE instalable en el teléfono).
+const APP_VERSION = "V1.7"
+const APP_STAGE = "Etapa 10"
 // Uso de la app: se guarda la última visita para poder avisar —una sola vez por hueco— cuando alguien
 // vuelve después de una semana o más sin abrir AVISPATE. Es el único aviso que no depende de un
 // recordatorio, así que vive aparte con su propia clave.
 const STORAGE_LAST_SEEN = "avispate.ultimaVisita.v1"
 const STORAGE_INACTIVITY = "avispate.avisosInactividad.v1"
+// Cola de avisos con la app cerrada (Etapa 10): las fechas concretas que este dispositivo ya calculó
+// y subió a la nube. Se guarda para que la batería pueda mirarla y para no recalcularla al abrir; el
+// servidor solo la recibe, no la inventa.
+const STORAGE_COLA = "avispate.cola.v1"
 const INACTIVITY_DAYS = 7
 const INACTIVITY_MESSAGE = "Bzzt… no te olvides de no olvidarte, ¡avíspate!"
 // Lo que viaja en la copia de seguridad: el contenido de la persona (sus recordatorios, sus usuarios,
@@ -389,9 +422,6 @@ function loadCategories(): Category[] {
 function dateKey(d = new Date()) {
   return d.toISOString().slice(0, 10)
 }
-function parseDate(date: string, time = "12:00") {
-  return new Date(`${date}T${time || "12:00"}:00`)
-}
 function daysUntil(date: string) {
   const today = new Date()
   today.setHours(0, 0, 0, 0)
@@ -432,9 +462,6 @@ function formatDaysLabel(days: number) {
     return `Vence en ${months === 1 ? "1 mes" : `${months} meses`}`
   return `Vence en ${Math.floor(months / 12)} años`
 }
-function pad2(n: number) {
-  return String(n).padStart(2, "0")
-}
 // Los recordatorios guardan la hora como "HH:MM" de 24 h; así se muestra según lo que se eligió en
 // Ajustes: 22:30 con el formato de 24 h y 10:30 p.m. con el de 12 h.
 function formatTime(time: string, clock12 = false) {
@@ -447,24 +474,6 @@ function formatTime(time: string, clock12 = false) {
 }
 function uid() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-}
-
-function addMonthsSafe(d: Date, months: number) {
-  const day = d.getDate()
-  d.setDate(1)
-  d.setMonth(d.getMonth() + months)
-  d.setDate(
-    Math.min(day, new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate()),
-  )
-}
-
-function addYearsSafe(d: Date, years: number) {
-  const day = d.getDate(),
-    month = d.getMonth()
-  d.setDate(1)
-  d.setFullYear(d.getFullYear() + years)
-  d.setMonth(month)
-  d.setDate(Math.min(day, new Date(d.getFullYear(), month + 1, 0).getDate()))
 }
 
 function recurrenceLabel(
@@ -500,48 +509,7 @@ function recurrenceLabel(
 // Próxima vuelta de un recordatorio que se repite. Devuelve fecha Y hora porque las repeticiones por
 // horas (cada 8 horas, o una cantidad personalizada de horas) mueven el reloj, no el calendario: si el
 // recordatorio vence a las 09:00 y se repite cada 8 horas, el siguiente es el mismo día a las 17:00.
-function nextOccurrenceAt(
-  date: string,
-  time: string,
-  recurrence: string,
-  interval?: number,
-  unit?: Reminder["recurrenceUnit"],
-) {
-  const d = parseDate(date, time)
-  if (recurrence === "No se repite") return { date, time: time || "12:00" }
-  const hours =
-    recurrence === "Cada 8 horas"
-      ? 8
-      : recurrence === "Personalizada" && unit === "horas" && interval
-        ? interval
-        : 0
-  if (hours > 0) {
-    d.setHours(d.getHours() + hours)
-    return {
-      date: `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`,
-      time: `${pad2(d.getHours())}:${pad2(d.getMinutes())}`,
-    }
-  }
-  if (recurrence === "Cada semana") d.setDate(d.getDate() + 7)
-  else if (recurrence === "Cada 2 semanas") d.setDate(d.getDate() + 14)
-  else if (recurrence === "Cada mes") addMonthsSafe(d, 1)
-  else if (recurrence === "Cada 6 meses") addMonthsSafe(d, 6)
-  else if (recurrence === "Cada año") addYearsSafe(d, 1)
-  else if (recurrence === "Cada 2 años") addYearsSafe(d, 2)
-  else if (recurrence === "Cada 5 años") addYearsSafe(d, 5)
-  else if (recurrence === "Cada 10 años") addYearsSafe(d, 10)
-  else if (recurrence === "Personalizada" && interval && unit) {
-    if (unit === "días") d.setDate(d.getDate() + interval)
-    else if (unit === "semanas") d.setDate(d.getDate() + interval * 7)
-    else if (unit === "meses") addMonthsSafe(d, interval)
-    else if (unit === "años") addYearsSafe(d, interval)
-  }
-  return {
-    date: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`,
-    time: time || "12:00",
-  }
-}
-
+// Vive en src/lib/repeticion.ts (junto con el calendario que usan los avisos con la app cerrada).
 const STATUS_CONFIG: Record<Status, {
   bg: string
   bar: string
@@ -899,35 +867,8 @@ function migrateLegacyProfileSettings() {
 // onboarding lean desde el primer render los datos ya repartidos por usuario.
 migrateRenamedKeys()
 migrateLegacyProfileSettings()
-const HOUR_OFFSET = 1 / 24 // "1 hora antes" expresado en días
-// Selector "Avísame": 90 / 30 / 14 / 7 días, 1 día y 1 hora antes.
-const PRESET_OFFSETS = [90, 30, 14, 7, 1, HOUR_OFFSET]
-const UNIT_SINGULAR: Record<ReminderAlert["unit"], string> = {
-  horas: "hora",
-  días: "día",
-  semanas: "semana",
-  meses: "mes",
-}
-function alertToDays(alert: ReminderAlert) {
-  if (alert.unit === "horas") return alert.amount * HOUR_OFFSET
-  if (alert.unit === "días") return alert.amount
-  if (alert.unit === "semanas") return alert.amount * 7
-  return alert.amount * 30
-}
-function unitText(unit: ReminderAlert["unit"], amount: number) {
-  return `${amount} ${amount === 1 ? UNIT_SINGULAR[unit] : unit}`
-}
-function alertLabel(alert: ReminderAlert) {
-  return `${unitText(alert.unit, alert.amount)} antes`
-}
-// Los avisos guardan siempre su offset en días, así que los de horas son fracción de día.
-function offsetLabel(days: number) {
-  if (days < 1) {
-    const h = Math.max(1, Math.round(days * 24))
-    return `${h} ${h === 1 ? "hora" : "horas"}`
-  }
-  return `${Math.round(days)} ${Math.round(days) === 1 ? "día" : "días"}`
-}
+// Los avisos («30 días antes», «1 hora antes») viven en src/lib/avisos.ts: de ahí salen las mismas
+// etiquetas y los mismos offsets que usa la cola de avisos con la app cerrada.
 // ¿Ya toca avisar? Los avisos de días/semanas/meses se disparan el día calendario que
 // corresponde; los de horas, al pasar la hora exacta (con 24 h de margen para no llegar tarde).
 function alertDueAt(eventAt: Date, offsetDays: number, now: Date) {
@@ -6246,6 +6187,105 @@ function SettingsScreen({
     const p = await Notification.requestPermission()
     setPermission(p)
   }
+  // Etapa 10: la otra mitad de los avisos. La tarjeta de arriba es el permiso del navegador (avisa
+  // mientras la app está abierta); esta es la suscripción push, que llega con la app cerrada y por eso
+  // necesita el service worker y la nube. El estado se lee al entrar y se vuelve a leer al volver a la
+  // app: si el permiso se cambió en el candado del sitio, la tarjeta lo refleja sin recargar.
+  const [estadoAvisosAhora, setEstadoAvisosAhora] = useState<EstadoAvisos | null>(null)
+  const [avisoOcupado, setAvisoOcupado] = useState(false)
+  const [avisoMensaje, setAvisoMensaje] = useState<{ ok: boolean; texto: string } | null>(null)
+  useEffect(() => {
+    let vivo = true
+    const leer = () =>
+      estadoAvisos().then((estado) => {
+        if (vivo) setEstadoAvisosAhora(estado)
+      })
+    void leer()
+    window.addEventListener("focus", leer)
+    document.addEventListener("visibilitychange", leer)
+    return () => {
+      vivo = false
+      window.removeEventListener("focus", leer)
+      document.removeEventListener("visibilitychange", leer)
+    }
+  }, [])
+  const encenderAvisos = async () => {
+    setAvisoOcupado(true)
+    setAvisoMensaje(null)
+    const resultado = await activarAvisos()
+    setEstadoAvisosAhora(resultado.estado)
+    if (resultado.estado === "activo") {
+      // Al activar se sube la cola de una vez: si no, el primer aviso con la app cerrada no tendría
+      // nada programado hasta el próximo cambio en los recordatorios.
+      const cola = programarAvisos(events)
+      try {
+        localStorage.setItem(STORAGE_COLA, JSON.stringify(cola))
+      } catch {}
+      const subida = await sincronizarCola(cola)
+      setAvisoMensaje(
+        subida.ok
+          ? {
+              ok: true,
+              texto: `Listo: ${cola.length} ${
+                cola.length === 1 ? "aviso programado" : "avisos programados"
+              } para este dispositivo.`,
+            }
+          : { ok: false, texto: subida.error || "No se pudo subir la cola a la nube." },
+      )
+    } else if (resultado.error) {
+      setAvisoMensaje({ ok: false, texto: resultado.error })
+    }
+    setAvisoOcupado(false)
+  }
+  const apagarAvisos = async () => {
+    setAvisoOcupado(true)
+    setAvisoMensaje(null)
+    const resultado = await desactivarAvisos()
+    setEstadoAvisosAhora(resultado.estado)
+    setAvisoMensaje({
+      ok: true,
+      texto: "Apagados: este dispositivo ya no va a recibir avisos con la app cerrada.",
+    })
+    setAvisoOcupado(false)
+  }
+  const probarAviso = async () => {
+    setAvisoOcupado(true)
+    setAvisoMensaje(null)
+    const resultado = await pedirAvisoDePrueba()
+    setAvisoMensaje(
+      resultado.ok
+        ? {
+            ok: true,
+            texto: "Prueba pedida: llega en menos de un minuto, aunque cierres la app.",
+          }
+        : { ok: false, texto: resultado.error || "No se pudo pedir la prueba." },
+    )
+    setAvisoOcupado(false)
+  }
+  const textoAvisos =
+    estadoAvisosAhora === null
+      ? "Revisando este dispositivo…"
+      : estadoAvisosAhora === "activo"
+        ? "Activado en este dispositivo: los avisos llegan aunque cierres la app."
+        : estadoAvisosAhora === "sin-nube"
+          ? "Falta conectar la nube: sin ella el servidor no tiene por dónde avisar."
+          : estadoAvisosAhora === "iphone-instalar"
+            ? "Primero agrega AVISPATE a la pantalla de inicio: Safari solo así acepta avisos."
+            : estadoAvisosAhora === "sin-soporte"
+              ? "Este navegador no puede avisar con la app cerrada."
+              : estadoAvisosAhora === "bloqueado"
+                ? "Bloqueado en el navegador: revisá el candado del sitio."
+                : "Listo para activar en este dispositivo."
+  const notaAvisos =
+    estadoAvisosAhora === "sin-nube"
+      ? "Pegá la anon key de Supabase en .env.local y volvé a compilar (ver supabase/README.md)."
+      : estadoAvisosAhora === "iphone-instalar"
+        ? "En iPhone: Compartir → Agregar a pantalla de inicio. Después abrí la app desde el ícono y activá los avisos acá."
+        : estadoAvisosAhora === "sin-soporte"
+          ? "Probá con Chrome, Edge o Safari actualizado; en iPhone, con la app instalada y iOS 16.4 o más nuevo."
+          : estadoAvisosAhora === "bloqueado"
+            ? "En el candado del sitio, permití las notificaciones y volvé a intentar."
+            : "Se programan en tu teléfono y se suben a la nube: el servidor solo mira la hora y manda. No hace falta tener la app abierta."
   // El permiso lo concede el navegador, no la app: no se puede dejar "activado por defecto" (el
   // navegador exige un toque del usuario y muestra su propio cartel). Lo que sí se puede es pedirlo en
   // el momento en que hace falta (al guardar un recordatorio con aviso por notificación, ver saveEvent)
@@ -6845,6 +6885,72 @@ function SettingsScreen({
           <p className="text-[11px] text-stone-400 mt-3 pt-3 border-t border-stone-50 dark:border-stone-800">
             {permissionNote}
           </p>
+        </div>
+        {/* Etapa 10: la misma familia de avisos, pero con la app cerrada. Acá se activa la suscripción
+        push del dispositivo; la tarjeta de arriba sigue siendo el permiso del navegador, que es lo que
+        usa la app abierta. Se separan porque se pueden dar por separado: sin push la app sigue
+        avisando mientras está abierta, y con push avisa también cuando no lo está. */}
+        <div className="bg-white dark:bg-stone-900 rounded-3xl p-5 border border-stone-100 dark:border-stone-800 mb-4">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p className="font-semibold text-[14px]">Avisos con la app cerrada</p>
+              <p className="text-[12px] text-stone-400 mt-1" aria-live="polite">
+                {textoAvisos}
+              </p>
+            </div>
+            {estadoAvisosAhora === "activo" ? (
+              <button
+                type="button"
+                onClick={apagarAvisos}
+                disabled={avisoOcupado}
+                className="px-3 py-2 rounded-xl bg-stone-100 dark:bg-stone-800 text-stone-600 dark:text-stone-300 text-[12px] font-bold flex-shrink-0 disabled:opacity-50"
+              >
+                Apagar
+              </button>
+            ) : estadoAvisosAhora === "pendiente" ||
+              estadoAvisosAhora === "bloqueado" ? (
+              <button
+                type="button"
+                onClick={encenderAvisos}
+                disabled={avisoOcupado}
+                className="px-3 py-2 rounded-xl bg-amber-50 dark:bg-amber-500/20 text-amber-700 dark:text-amber-300 text-[12px] font-bold flex-shrink-0 disabled:opacity-50"
+              >
+                Activar avisos
+              </button>
+            ) : null}
+          </div>
+          <p className="text-[11px] text-stone-400 mt-3 pt-3 border-t border-stone-50 dark:border-stone-800">
+            {notaAvisos}
+          </p>
+          {estadoAvisosAhora === "activo" && (
+            <button
+              type="button"
+              onClick={probarAviso}
+              disabled={avisoOcupado}
+              className="mt-3 w-full py-2.5 rounded-xl bg-amber-500 text-white text-[12px] font-bold disabled:opacity-50"
+            >
+              Probar aviso
+            </button>
+          )}
+          {avisoMensaje && (
+            <p
+              role="status"
+              className={`text-[11px] mt-2 ${
+                avisoMensaje.ok
+                  ? "text-emerald-600 dark:text-emerald-400"
+                  : "text-rose-600 dark:text-rose-400"
+              }`}
+            >
+              {avisoMensaje.texto}
+            </p>
+          )}
+          {!esInstalada() && (
+            <p className="text-[11px] text-stone-400 mt-3 pt-3 border-t border-stone-50 dark:border-stone-800">
+              Para tenerla como una app: en <strong>iPhone</strong>, Compartir → «Agregar a
+              pantalla de inicio»; en <strong>Android</strong>, menú ⋮ → «Instalar
+              aplicación».
+            </p>
+          )}
         </div>
         {/* Los tres calendarios en UNA sola burbuja: cerrada se ve el encabezado con los tres logos y la
         flecha, con el resumen de cuáles están conectados; al abrirla baja el contenido —Google, Apple y
@@ -7456,6 +7562,21 @@ export default function App() {
   // inicio de la app se revela saliendo del desenfoque (ver BeeHandoff). El temporizador lo apaga.
   const [handoff, setHandoff] = useState(false)
   const handoffTimer = useRef<number | null>(null)
+  // Etapa 10: la entrega nueva avisa con una píldora, no recargando sola. El service worker nuevo se
+  // queda esperando a que alguien toque «Actualizar» (ver src/lib/pwa.ts).
+  const [versionNueva, setVersionNueva] = useState(false)
+  useEffect(() => {
+    let vivo = true
+    const arrancar = async () => {
+      await registrarSW()
+      if (!vivo) return
+      vigilarVersionNueva(() => setVersionNueva(true))
+    }
+    void arrancar()
+    return () => {
+      vivo = false
+    }
+  }, [])
 
   useEffect(() => {
     document.documentElement.classList.toggle("dark", dark)
@@ -7504,6 +7625,17 @@ export default function App() {
 
   useEffect(() => {
     localStorage.setItem(STORAGE_EVENTS, JSON.stringify(events))
+  }, [events])
+  // Etapa 10: la cola de avisos con la app cerrada. Se recalcula cuando cambian los recordatorios (y al
+  // abrir), se guarda en el dispositivo —la batería la mira ahí— y, si este teléfono ya está suscrito,
+  // se sube a la nube. Recalcular es barato (unas fechas) y así el servidor nunca queda con una cola
+  // vieja; subirla tarda un momento y se agrupa (ver sincronizarCola).
+  useEffect(() => {
+    const cola = programarAvisos(events)
+    try {
+      localStorage.setItem(STORAGE_COLA, JSON.stringify(cola))
+    } catch {}
+    if (pushAnotado()) void sincronizarCola(cola)
   }, [events])
   useEffect(() => {
     localStorage.setItem(STORAGE_NOTIFICATIONS, JSON.stringify(notifications))
@@ -8192,6 +8324,23 @@ export default function App() {
                 setScreen("create")
               }}
             />
+          </div>
+        )}
+        {versionNueva && (
+          <div className="absolute left-1/2 -translate-x-1/2 bottom-24 z-40 flex items-center gap-2 rounded-full bg-stone-900/95 dark:bg-stone-100/95 text-white dark:text-stone-900 pl-4 pr-1.5 py-1.5 shadow-lg">
+            <span className="text-[11px] font-semibold whitespace-nowrap">
+              Hay una versión nueva
+            </span>
+            <button
+              type="button"
+              onClick={() => {
+                setVersionNueva(false)
+                void activarVersionNueva()
+              }}
+              className="rounded-full bg-amber-500 text-white text-[11px] font-bold px-3 py-1.5"
+            >
+              Actualizar
+            </button>
           </div>
         )}
         {handoff && <BeeHandoff />}

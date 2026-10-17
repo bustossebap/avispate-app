@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="AVISPATE">
+  <defs>
+    <linearGradient id="miel" x1="0" y1="0" x2="0.3" y2="1">
+      <stop offset="0" stop-color="#FCD34D" />
+      <stop offset="0.55" stop-color="#F59E0B" />
+      <stop offset="1" stop-color="#D97706" />
+    </linearGradient>
+    <clipPath id="cuerpo">
+      <ellipse cx="256" cy="300" rx="88" ry="100" />
+    </clipPath>
+  </defs>
+
+  <!-- Fondo a sangre: la misma miel de la app. Sirve tal cual como icono maskable (el dibujo queda
+       dentro del 80 % central, que es la zona que Android nunca recorta). -->
+  <rect width="512" height="512" rx="112" fill="url(#miel)" />
+  <circle cx="256" cy="210" r="190" fill="#FFFFFF" opacity="0.12" />
+
+  <g transform="rotate(-10 256 300)">
+    <!-- Alas -->
+    <ellipse cx="192" cy="196" rx="58" ry="34" transform="rotate(-34 192 196)" fill="#FFFDF5" opacity="0.92" stroke="#1C1917" stroke-width="9" />
+    <ellipse cx="320" cy="196" rx="58" ry="34" transform="rotate(34 320 196)" fill="#FFFDF5" opacity="0.92" stroke="#1C1917" stroke-width="9" />
+
+    <!-- Cuerpo con las tres franjas -->
+    <ellipse cx="256" cy="300" rx="88" ry="100" fill="#FFFDF5" stroke="#1C1917" stroke-width="12" />
+    <g clip-path="url(#cuerpo)" fill="#1C1917">
+      <rect x="150" y="252" width="212" height="26" />
+      <rect x="150" y="300" width="212" height="26" />
+      <rect x="150" y="348" width="212" height="26" />
+    </g>
+
+    <!-- Aguijón -->
+    <path d="M256 396 l20 26 h-40 z" fill="#1C1917" />
+
+    <!-- Cabeza y antenas -->
+    <circle cx="256" cy="178" r="48" fill="#1C1917" />
+    <circle cx="240" cy="170" r="9" fill="#FFFDF5" />
+    <circle cx="272" cy="170" r="9" fill="#FFFDF5" />
+    <path d="M238 140 C222 118 208 108 196 100" fill="none" stroke="#1C1917" stroke-width="12" stroke-linecap="round" />
+    <path d="M274 140 C290 118 304 108 316 100" fill="none" stroke="#1C1917" stroke-width="12" stroke-linecap="round" />
+  </g>
+</svg>

@@ -3,8 +3,19 @@
   <head>
     <!-- figma:head-start -->
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title><!-- figma:title --></title>
+    <!-- Etapa 10: la app instalable. El manifest es el mismo que lee Android al «Instalar aplicación»;
+         en iPhone, Safari usa apple-touch-icon y el título corto al «Agregar a pantalla de inicio». Las
+         rutas son relativas, como el resto del build, para que dist/ funcione desde cualquier raíz. -->
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <meta name="theme-color" content="#F59E0B" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="AVISPATE" />
+    <link rel="apple-touch-icon" href="./icono-180.png" />
+    <link rel="icon" type="image/svg+xml" href="./icono.svg" />
+    <link rel="icon" type="image/png" sizes="32x32" href="./icono-32.png" />
     <script>
       try {
         var d = localStorage.getItem("avispate.dark.v1") || localStorage.getItem("recuerda.dark.v1");

@@ -11,8 +11,8 @@
     "test": "node tests/run.mjs",
     "test:e2e": "node tests/run.mjs",
     "verificar": "bash scripts/verificar.sh",
-    "format": "oxfmt tests/*.mjs scripts/*.sh",
-    "format:check": "oxfmt --check tests/*.mjs scripts/*.sh"
+    "format": "oxfmt tests/*.mjs scripts/*.sh scripts/*.mjs",
+    "format:check": "oxfmt --check tests/*.mjs scripts/*.sh scripts/*.mjs"
   },
   "dependencies": {
     "react": "^19.0.0",
