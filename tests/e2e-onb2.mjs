@@ -172,16 +172,16 @@ const { check, finish } = reporter()
     JSON.stringify(m.txt().slice(0, 120)),
   )
   check(
-    "A · paso 7 con el campo de teléfono y su extensión de país (Chile por defecto)",
+    "A · paso 7 con el campo de teléfono y su extensión +56 9 (Chile por defecto)",
     m.txt().includes("Número de WhatsApp") &&
       m.input("onboarding-phone")?.getAttribute("type") === "tel" &&
       m.input("onboarding-phone")?.getAttribute("placeholder") ===
-        "9 1234 5678" &&
+        "1234 5678" &&
       extSel()?.value === "+56" &&
       (
         [...(extSel()?.options || [])].find((o) => o.value === "+56")
           ?.textContent || ""
-      ).trim() === "🇨🇱" &&
+      ).trim() === "🇨🇱 +56 9" &&
       !(extSel()?.textContent || "").includes("Chile"),
   )
   check(
@@ -408,8 +408,8 @@ const { check, finish } = reporter()
   m.clickText("button", "Siguiente")
   await wait(40)
   check(
-    "C · precarga el número guardado con su extensión (Chile) y separado del país",
-    m.input("onboarding-phone")?.value === "9 1111 2222" &&
+    "C · precarga el número sin repetir el 9 que ya muestra el prefijo (Chile)",
+    m.input("onboarding-phone")?.value === "1111 2222" &&
       m.doc.querySelector('#root select[aria-label="Extensión de país"]')
         ?.value === "+56",
     `${m.doc.querySelector('#root select[aria-label="Extensión de país"]')?.value} ${m.input("onboarding-phone")?.value}`,

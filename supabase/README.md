@@ -88,6 +88,41 @@ Supabase · dispositivos + avisos  ◀── cron cada minuto ──▶ Edge Fun
       and proname in ('subir_cambios','bajar_cambios','purgar_tumbas');
    ```
 
+   Después, `supabase/migrations/0006_etapa15_dispositivos.sql` agrega el nombre propio por cuenta y
+   las funciones `renombrar_dispositivo` y `desvincular_todos_dispositivos`; vuelve a crear
+   `mis_dispositivos` para devolver ese nombre. Es idempotente:
+
+   ```sql
+   select proname from pg_proc
+    where pronamespace = 'public'::regnamespace
+      and proname in ('renombrar_dispositivo','desvincular_todos_dispositivos','mis_dispositivos');
+   ```
+
+   Luego, `supabase/migrations/0007_etapa15_adjuntos.sql` crea el bucket **privado** `adjuntos`
+   (10 MB y tipos permitidos) y sus cuatro políticas por dueño. La primera carpeta de la ruta es el
+   `auth.uid()`: cada cuenta solo ve y toca lo suyo. Comprobación:
+
+   ```sql
+   select id, public, file_size_limit from storage.buckets where id = 'adjuntos';
+   select policyname, cmd from pg_policies
+    where schemaname = 'storage' and tablename = 'objects'
+      and policyname like 'adjuntos:%';
+   ```
+
+   Por último, `supabase/migrations/0008_etapa15_realtime.sql` agrega las cinco tablas del motor a la
+   publicación `supabase_realtime`. Sin esa publicación el WebSocket se une pero no recibe cambios;
+   el sondeo de 45 s sigue funcionando igual. Comprobación:
+
+   ```sql
+   select tablename from pg_publication_tables
+    where pubname = 'supabase_realtime' and schemaname = 'public'
+    order by tablename;
+   ```
+
+   Las cuatro migraciones de la Etapa 15 no llevan marcadores que cambiar. Las pruebas negativas
+   `supabase/tests/0005_negativo.sql` y `0006_negativo.sql` se corren al final, contra el proyecto y
+   dentro de una transacción que termina en `rollback`.
+
 2. **Secretos de las funciones.** El proyecto ya tiene las claves VAPID en `.env.local` (que no se
    versiona). Se suben a Supabase así:
 
@@ -189,8 +224,11 @@ entra desde **Ajustes → Cuenta** con un enlace mágico; no hay contraseñas ni
   limpia el hash. La sesión se renueva con el refresh token un minuto antes de vencer.
 - «Vincular este teléfono» llama a `reclamar_dispositivo` con el id y el **token** del dispositivo.
   La función exige `auth.uid()` y comprueba el token; el `user_id` nunca viaja como parámetro.
-- La tarjeta muestra la cuenta, el estado del vínculo y los teléfonos vinculados. «Cerrar sesión»
-  borra la sesión de este teléfono, pero deja los recordatorios locales (modo invitado).
+- La tarjeta muestra la cuenta, el estado del vínculo y los teléfonos vinculados, con su última
+  conexión real. Cada teléfono se puede renombrar o cerrar desde otro equipo; «Cerrar sesión en
+  todos» llama a `desvincular_todos_dispositivos` y después a `/auth/v1/logout?scope=global`.
+- Al salir, la app pregunta si conservar o borrar la copia local. Borrar vacía localStorage (salvo
+  la identidad del dispositivo) y las bases de adjuntos; el modo invitado sigue funcionando.
 - La sesión **no** entra en las copias de seguridad: `CLAVES_COPIA` no la incluye.
 
 ### Probar
@@ -245,14 +283,33 @@ servidor guarda el `payload` completo y aplica la misma regla de conflicto que e
   el SQL Editor o un cron interno.
 - **Prueba negativa:** `supabase/tests/0005_negativo.sql` crea dos cuentas y dos dispositivos dentro
   de una transacción y comprueba RLS, token incorrecto, dispositivo no vinculado, `anon`, borrado
-  lógico y el desempate por dispositivo. Se corre después de aplicar la 0005 y se revierte.
+  lógico y el desempate por dispositivo. `supabase/tests/0006_negativo.sql` suma renombre, cierre de
+  todos los vínculos, el rechazo del motor para un equipo desvinculado, el bucket privado y las cinco
+  tablas de Realtime. Las dos se corren después de aplicar todas las migraciones y se revierten.
+
+### Adjuntos en Storage (fase 5)
+
+El bucket `adjuntos` es privado y la app lo usa por la API REST, sin SDK. La ruta de cada archivo es
+`{auth.uid()}/{id}` y las cuatro políticas de `storage.objects` comparan la primera carpeta con
+`auth.uid()`: una cuenta no puede leer ni borrar la carpeta de otra. Los archivos se suben con
+`POST /storage/v1/object/adjuntos/{ruta}` y `x-upsert: true`; para mostrarlos se pide
+`POST /storage/v1/object/sign/adjuntos/{ruta}` y se usa la URL firmada (una hora). El borrado es
+`DELETE /storage/v1/object/adjuntos/{ruta}`. Si el bucket o la red fallan, el archivo sigue en
+IndexedDB y en la cola `avispate.adjuntos.cola.v1`.
+
+### Realtime (fase 6)
+
+La app abre `wss://<proyecto>.supabase.co/realtime/v1/websocket?apikey=…&vsn=1.0.0`, se une al canal
+`realtime:avispate` con el access token de la cuenta y pide `postgres_changes` de `recordatorios`,
+`categorias`, `perfiles`, `ajustes` y `marcas`, filtrados por `user_id=eq.{id}`. Las políticas
+`select` son las que deciden qué filas viajan. Un aviso dispara una pasada del motor; si el canal se
+cae, se reconecta con espera creciente y el sondeo de 45 s sigue siendo la red de seguridad.
 
 ### Lo que todavía no hace la cuenta
 
-La sincronización ya lleva recordatorios, categorías, perfiles, ajustes y marcas de avisos entre
-teléfonos de la misma cuenta. Faltan los **adjuntos** en Storage, **Realtime** (hoy se consulta cada
-45 s o con «Sincronizar ahora»), el nombre editable y el cierre remoto de los dispositivos, y el
-historial de versiones para un conflicto. Los detalles están en
+La sincronización lleva las cinco entidades, los adjuntos y los avisos de Realtime entre teléfonos de
+la misma cuenta. Queda el historial de versiones para un conflicto, la descarga masiva de adjuntos y
+la restauración completa cuando un teléfono estuvo más de 90 días sin abrir. Los detalles están en
 [`docs/etapa15-cuenta-y-sincronizacion.md`](../docs/etapa15-cuenta-y-sincronizacion.md).
 
 ## WhatsApp y correo (Etapa 14)
@@ -266,22 +323,54 @@ historial de versiones para un conflicto. Los detalles están en
    vence en 24 h y no sirve para producción.
 3. Creá la **plantilla de utilidad** en *WhatsApp Manager → Message templates*. Nombre:
    `avispate_recordatorio` (o el que pongas en `WHATSAPP_TEMPLATE`), idioma `es`, categoría
-   *Utility*, cuerpo con tres variables:
+   *Utility*, cuerpo con tres variables (el texto fijo al principio es obligatorio: Meta no acepta
+   una plantilla que empiece o termine con una variable):
 
    ```
-   {{1}}
+   Hola. Este es un recordatorio de AVISPATE: {{1}}
    {{2}}
-   Fecha: {{3}}
+   Fecha y hora: {{3}}
+   Abrí AVISPATE para ver el detalle, marcarlo como hecho o posponerlo.
    ```
 
    AVISPATE manda en `{{1}}` el título con emoji, en `{{2}}` el mensaje («… vence en 2 días») y en
    `{{3}}` la fecha en la zona horaria del teléfono. Los valores de ejemplo de la plantilla deben
-   respetar ese orden; Meta los revisa y puede tardar unas horas.
+   respetar ese orden; Meta los revisa y puede tardar unas horas. El texto fijo de la plantilla es
+   solo de la plantilla: la función no lo manda. Hace falta ese texto de contexto porque Meta rechaza
+   las plantillas con demasiadas variables en relación con su longitud (`2388293`).
 4. **Webhook.** En *WhatsApp → Configuration*, URL de callback:
    `https://vmctsurhswayrrwrkggj.supabase.co/functions/v1/webhooks-envio` y verify token
    `WHATSAPP_VERIFY_TOKEN`. Suscribí el campo `messages` (ahí llegan los estados `sent`, `delivered`,
    `read` y `failed`). La función responde el `hub.challenge` y valida `x-hub-signature-256` con
    `WHATSAPP_APP_SECRET`.
+
+   El **App Secret** no está en WhatsApp Manager: se copia en *Meta for Developers → tu app →
+   Configuración de la app → Básica → Clave secreta de la app*. No es el token de WhatsApp. Para
+   registrar la callback por API, Meta exige un **app access token** (`{app-id}|{app-secret}`); el
+   token de System User no sirve para `POST /{app-id}/subscriptions`. También se puede registrar a
+   mano desde *WhatsApp → Configuration*, sin App Secret. En ese caso la función acepta los eventos
+   con `?secreto=WEBHOOK_TOKEN` hasta que cargues el secreto y pueda validar la firma.
+
+#### Estado de esta instalación (19-10-2026)
+
+- La WABA activa es la **de prueba**: «Test WhatsApp Business Account» (`2206008886998029`), con el
+  número `+1 555-197-5017` (`WHATSAPP_PHONE_ID=1442076502314919`).
+- La app **Avispate** (`1096911179875557`) ya está suscrita a esa WABA (`subscribed_apps`) y el
+  webhook a nivel app está registrado y activo con el campo `messages`.
+- `WHATSAPP_APP_SECRET` está cargado y la función valida `x-hub-signature-256`: una firma correcta
+  devuelve `200`; una firma ausente o incorrecta, `401`.
+- El `WHATSAPP_TOKEN` actual es el **temporal de API Setup** y vence el **19-10-2026 a las 02:00
+  -03** (05:00 UTC). Para producción hay que asignar una WABA real al System User `AVISPATE API`,
+  generar el token permanente, recrear la plantilla y volver a cargar los secretos. Las WABAs de
+  prueba no se pueden asignar a un System User.
+- Los secretos de WhatsApp de esta instalación se cargan desde `supabase/.env.whatsapp.local` (no
+  versionado); `supabase/.env.whatsapp.secrets` quedó obsoleto y no se usa.
+- `enviar-avisos` incluye las cabeceras CORS (`Access-Control-Allow-Origin: *`, `-Headers` y
+  `-Methods`): la PWA puede consultar el estado de los canales desde el celular. Verificado el
+  19-10-2026: `OPTIONS` y `GET` responden `200` con `whatsapp: true`.
+- Para la prueba desde el celular, el número guardado en **Contacto** debe estar en *Meta → WhatsApp
+  → API Setup → To → Manage phone number list* (WABA de prueba). Si falta, Meta responde `131030`
+  y el error queda en «Últimos envíos».
 
 ### Correo con Resend
 
@@ -336,9 +425,12 @@ envíos» al tocar «Revisar ahora» en la tarjeta de salud o al volver a Ajuste
   todavía no tiene una política por usuario.
 - La cuenta (Etapa 15) suma sus propias reglas: `perfiles_cuenta` y `dispositivos_cuenta` tienen RLS
   y una política de `select` por usuario; `anon` no puede leerlas ni escribir directamente. Las
-  funciones `reclamar_dispositivo`, `desvincular_dispositivo` y `mis_dispositivos` están revocadas
-  de `public`/`anon` y solo las puede ejecutar `authenticated`. El alta, además de la sesión, exige el
-  token del dispositivo.
+  funciones `reclamar_dispositivo`, `renombrar_dispositivo`, `desvincular_dispositivo`,
+  `desvincular_todos_dispositivos` y `mis_dispositivos` están revocadas de `public`/`anon` y solo las
+  puede ejecutar `authenticated`. El alta, además de la sesión, exige el token del dispositivo.
+- El bucket `adjuntos` y sus cuatro políticas viven en el esquema `storage`; `anon` no tiene acceso y
+  cada política comprueba `(storage.foldername(name))[1] = auth.uid()::text`.
+- Realtime usa las mismas políticas `select`: la unión al canal no concede permisos por sí sola.
 - Las cinco tablas de datos de la 0005 tienen RLS y una política de `select` para `authenticated`
   (`auth.uid() = user_id`); no hay escritura directa, solo `subir_cambios`. `anon` no tiene acceso.
   `subir_cambios` y `bajar_cambios` son `security definer`, exigen sesión, token y vínculo, y revocan
@@ -381,6 +473,8 @@ central y no un lujo.
 | «Posponer» abre la app en vez de posponer | Falta correr la `0002_etapa11.sql`, o el teléfono no tiene guardadas sus credenciales: *Apagar* y *Activar avisos* de nuevo. |
 | La notificación no muestra los botones | El teléfono o el navegador no permiten acciones en las notificaciones (iOS viejo, por ejemplo): tocarla abre la app, que es el camino de siempre. |
 | Ajustes dice «Falta configurar en la nube» en WhatsApp | Faltan `WHATSAPP_TOKEN` y `WHATSAPP_PHONE_ID` en los secretos, o el token temporal venció (24 h). Usá el token permanente del System User. |
+| Graph responde `190` «Session has expired» | El token no era permanente. En Meta Business → Usuarios → Usuarios del sistema, generá uno nuevo con expiración **Nunca** y los permisos `whatsapp_business_messaging` + `whatsapp_business_management`; guardalo en `WHATSAPP_TOKEN` y volvé a subir los secretos. |
+| Meta responde `(#15)` al registrar el webhook | `POST /{app-id}/subscriptions` exige un app access token (`APP_ID|APP_SECRET`); el token de System User no sirve. Cargá `WHATSAPP_APP_SECRET` o registrá la callback a mano desde *WhatsApp → Configuration*. |
 | Meta responde `132000` o «template not found» | `WHATSAPP_TEMPLATE` / `WHATSAPP_TEMPLATE_LANG` no coinciden con la plantilla aprobada, o la plantilla todavía está en revisión. |
 | WhatsApp falla con `131047` (re-engagement) | Pasaron más de 24 h desde el último mensaje de la persona y la plantilla no está aprobada como *Utility*. Revisá la categoría en WhatsApp Manager. |
 | El correo no sale y Resend dice `403` | El dominio no está verificado (SPF/DKIM) o `EMAIL_FROM` usa otro remitente. Revisá *Domains* en Resend. |

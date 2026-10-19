@@ -35,8 +35,22 @@ const reminderFor = (id, ownerId, name) => ({
 // y el interruptor de un canal del usuario activo.
 const ampliar = (sesion) =>
   Object.assign(sesion, {
-    phoneValue: () =>
-      `${sesion.doc.querySelector('#root select[aria-label="Extensión de país"]')?.value || ""} ${sesion.doc.querySelector("#profile-phone")?.value || ""}`.trim(),
+    phoneValue: () => {
+      const select = sesion.doc.querySelector(
+        '#root select[aria-label="Extensión de país"]',
+      )
+      // El option muestra bandera + prefijo completo (+56 9). Para comparar con lo que se guarda se
+      // quita la bandera y se suma el número local que va en el campo.
+      const prefijo = (
+        select?.selectedOptions?.[0]?.textContent ||
+        select?.value ||
+        ""
+      )
+        .replace(/^[^\s]+\s+/, "")
+        .trim()
+      const local = sesion.doc.querySelector("#profile-phone")?.value || ""
+      return `${prefijo} ${local}`.trim()
+    },
     channelSw: (label) =>
       sesion.doc.querySelector(`[aria-label="Canal ${label} de este usuario"]`),
   })

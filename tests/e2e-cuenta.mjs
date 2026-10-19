@@ -231,7 +231,7 @@ const cuerpo = (llamada) => {
   )
   check("la tarjeta vuelve a Sin vincular", m.txt().includes("Sin vincular"))
 
-  m.clickText("button", "Cerrar sesión")
+  m.clickText("button", "Cerrar sesión en este teléfono")
   await wait(80)
   check(
     "cerrar sesión avisa a la nube",

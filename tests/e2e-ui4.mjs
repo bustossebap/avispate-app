@@ -358,12 +358,14 @@ const seedApp = (extra) => ({
     !!m.rowOf("Yo") && !!m.rowOf("Abuela") && !!m.rowOf("Empresa"),
   )
 
-  const ticket = () => m.doc.getElementById("profile-contact-accept")
+  const confirmar = () => m.doc.getElementById("profile-contact-confirm")
   check(
-    "C2 · Yo (datos de antes) tiene el ticket marcado",
-    !!ticket() &&
-      ticket().checked === true &&
-      m.txt().includes("Acepto que AVISPATE use estos datos"),
+    "C2 · Yo (datos de antes) ya está confirmado y muestra «Editar datos»",
+    !!confirmar() &&
+      (confirmar().textContent || "").trim() === "Editar datos" &&
+      m.input("profile-phone")?.disabled === true &&
+      m.input("profile-email")?.disabled === true &&
+      m.txt().includes("Al confirmar, aceptas que AVISPATE use estos datos"),
     JSON.stringify(m.txt().slice(0, 200)),
   )
   check(
@@ -374,16 +376,18 @@ const seedApp = (extra) => ({
   m.click(m.rowOf("Abuela").querySelector("button"))
   await wait(60)
   check(
-    "C2 · sin datos no hay nada que aceptar: no aparece el ticket",
-    m.doc.getElementById("profile-contact-accept") === null &&
-      !m.txt().includes("Acepto que AVISPATE"),
+    "C2 · sin datos no hay nada que confirmar: no aparece el botón",
+    m.doc.getElementById("profile-contact-confirm") === null &&
+      !m.txt().includes("Al confirmar, aceptas"),
   )
 
   m.click(m.rowOf("Empresa").querySelector("button"))
   await wait(60)
   check(
-    "C3 · Empresa tiene el ticket sin marcar",
-    !!ticket() && ticket().checked === false,
+    "C3 · Empresa tiene los datos sin confirmar",
+    !!confirmar() &&
+      (confirmar().textContent || "").trim() === "Confirmar datos" &&
+      m.input("profile-phone")?.disabled === false,
   )
   check(
     "C3 · sus datos quedan «Por confirmar»",
@@ -395,21 +399,23 @@ const seedApp = (extra) => ({
     m
       .txt()
       .includes(
-        "Sin el ticket marcado, los avisos por WhatsApp y correo quedan en pausa.",
+        "Sin confirmar, los avisos por WhatsApp y correo quedan en pausa.",
       ),
   )
 
-  m.click(ticket())
+  m.click(confirmar())
   await wait(60)
   check(
-    "C3 · al marcar el ticket se guarda la aceptación",
+    "C3 · al confirmar se guarda la aceptación",
     m.profileOf("empresa")?.contact?.accepted === true,
     JSON.stringify(m.profileOf("empresa")),
   )
   check(
-    "C3 · sus datos pasan a conectados",
+    "C3 · sus datos pasan a conectados y los campos se bloquean",
     (m.txt().match(/✓ Conectado/g) || []).length === 2 &&
-      !m.txt().includes("Sin el ticket marcado"),
+      !m.txt().includes("Sin confirmar") &&
+      m.input("profile-phone")?.disabled === true &&
+      (confirmar()?.textContent || "").trim() === "Editar datos",
   )
   check(
     "C3 · y su canal se enciende en la lista de usuarios",
@@ -419,12 +425,20 @@ const seedApp = (extra) => ({
 
   m.click(m.rowOf("Yo").querySelector("button"))
   await wait(60)
+  m.click(confirmar())
+  await wait(60)
+  check(
+    "C4 · «Editar datos» habilita los campos sin perder la confirmación",
+    m.input("profile-phone")?.disabled === false &&
+      m.profileOf("yo")?.contact?.accepted !== false &&
+      (confirmar()?.textContent || "").trim() === "Confirmar datos",
+  )
   m.type(m.input("profile-phone"), "9 9999 8888")
   await wait(60)
   check(
-    "C4 · al cambiar el número el ticket se destilda solo",
-    ticket()?.checked === false &&
-      m.profileOf("yo")?.contact?.accepted === false,
+    "C4 · al cambiar el número la confirmación vuelve a pendiente",
+    m.profileOf("yo")?.contact?.accepted === false &&
+      (confirmar()?.textContent || "").trim() === "Confirmar datos",
     JSON.stringify(m.profileOf("yo")?.contact),
   )
   check(
@@ -455,11 +469,11 @@ const seedApp = (extra) => ({
     !!m.badge("WhatsApp sin configurar (Yo)") &&
       !!m.badge("Correo sin configurar (Yo)"),
   )
-  m.click(ticket())
+  m.click(confirmar())
   await wait(60)
   check(
-    "C4 · al volver a aceptar, todo se reconecta",
-    ticket()?.checked === true &&
+    "C4 · al volver a confirmar, todo se reconecta",
+    m.input("profile-phone")?.disabled === true &&
       m.profileOf("yo")?.contact?.accepted === true &&
       !!m.badge("WhatsApp conectado (Yo)"),
   )

@@ -473,19 +473,19 @@ const { check, finish } = reporter()
     !!ext() &&
       ext().value === "+56" &&
       [...ext().options].length >= 15 &&
-      (opcion("+56")?.textContent || "").trim() === "🇨🇱",
+      (opcion("+56")?.textContent || "").trim() === "🇨🇱 +56 9",
     String([...(ext()?.options || [])].length),
   )
-  // El cuadro quedó chico y con la bandera sola: el nombre del país no se gasta en la pantalla (está al
-  // abrir la lista y en el texto que aparece al pasar el dedo) y el número tiene todo el ancho.
+  // El cuadro muestra la bandera y el prefijo completo (con el 9 del celular), sin el nombre del país:
+  // el nombre se lee al abrir la lista o al pasar el dedo, y el número conserva todo el ancho.
   const filaNumero = () => m.input("profile-phone")?.parentElement
   const filaTitulo = () =>
     m.doc.querySelector('#root label[for="profile-phone"]')?.parentElement
   check(
-    "P1 · la extensión es un cuadro chico con la bandera y sin el nombre del país",
-    (ext().className || "").includes("w-[62px]") &&
+    "P1 · la extensión muestra bandera y prefijo, sin el nombre del país",
+    (ext().className || "").includes("w-[112px]") &&
       (ext().className || "").includes("appearance-none") &&
-      (opcion("+1")?.textContent || "").trim() === "🇺🇸" &&
+      (opcion("+1")?.textContent || "").trim() === "🇺🇸 +1" &&
       ![...ext().options].some((o) =>
         /Chile|Estados Unidos|Argentina/.test(o.textContent || ""),
       ),
@@ -513,7 +513,7 @@ const { check, finish } = reporter()
       (tituloDe("profile-email")?.textContent || "").includes(
         "Correo electrónico",
       ) &&
-      !(campoDe("profile-email")?.textContent || "").includes("Conectado"),
+      !(m.input("profile-email")?.textContent || "").includes("Conectado"),
     JSON.stringify(tituloDe("profile-email")?.textContent),
   )
   check(
@@ -531,16 +531,19 @@ const { check, finish } = reporter()
     `${tituloDe("profile-phone")?.className} | ${tituloDe("profile-email")?.className}`,
   )
   check(
-    "P1 · y el número se escribe aparte, sin repetir el país",
-    m.input("profile-phone")?.value === "9 1111 2222" &&
-      m.input("profile-phone")?.getAttribute("placeholder") === "9 1234 5678",
+    "P1 · y el número se escribe aparte, sin repetir el país ni el 9",
+    m.input("profile-phone")?.value === "1111 2222" &&
+      m.input("profile-phone")?.getAttribute("placeholder") === "1234 5678",
     m.input("profile-phone")?.value,
   )
+  // Los datos ya confirmados están bloqueados: «Editar datos» habilita los campos.
+  m.click(m.doc.getElementById("profile-contact-confirm"))
+  await wait(30)
   m.type(m.input("profile-phone"), "8888 7777")
   await wait(30)
   check(
-    "P1 · al escribir se guarda con la extensión elegida",
-    m.profileOf("yo")?.contact?.phone === "+56 8888 7777",
+    "P1 · al escribir se guarda con el prefijo y el 9 del celular",
+    m.profileOf("yo")?.contact?.phone === "+56 9 8888 7777",
     JSON.stringify(m.profileOf("yo")?.contact),
   )
   m.pick(ext(), "+1")
@@ -564,6 +567,16 @@ const { check, finish } = reporter()
     "P1 · al volver a ese usuario, su número aparece con SU extensión",
     ext().value === "+1" && m.input("profile-phone")?.value === "8888 7777",
     `${ext().value} ${m.input("profile-phone")?.value}`,
+  )
+  // Un número local chileno que empieza por 9 no es el prefijo móvil: se conserva entero.
+  m.pick(ext(), "+56")
+  await wait(30)
+  m.type(m.input("profile-phone"), "9999 8888")
+  await wait(30)
+  check(
+    "P1 · un número local que empieza por 9 no se confunde con el prefijo",
+    m.profileOf("yo")?.contact?.phone === "+56 9 9999 8888",
+    JSON.stringify(m.profileOf("yo")?.contact),
   )
   check(
     "P1 · sin errores de ejecución",

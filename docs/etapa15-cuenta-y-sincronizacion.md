@@ -1,9 +1,8 @@
 # Etapa 15 · Cuenta y sincronización entre teléfonos (V2.1)
 
-Estado: **fases 1, 2 y 3 terminadas**. La cuenta, el esquema por entidad y el motor de
-sincronización ya funcionan; la lista de dispositivos con cierre remoto (fase 4), los adjuntos en
-Storage y Realtime quedan para las próximas entregas. El motor sigue siendo opcional: sin cuenta,
-AVISPATE funciona igual que siempre.
+Estado: **Etapa 15 terminada (fases 1 a 6)**. La cuenta, el esquema por entidad, el motor de
+sincronización, la lista de dispositivos con cierre remoto, los adjuntos en Storage y Realtime ya
+funcionan. El motor sigue siendo opcional: sin cuenta, AVISPATE funciona igual que siempre.
 
 ## Objetivo
 
@@ -32,7 +31,8 @@ sigue funcionando sola**, y el modo invitado sigue existiendo.
 | --- | --- | --- |
 | `auth.users` | Correo, id y metadatos de la cuenta (Supabase Auth) | Supabase Auth |
 | `perfiles_cuenta` | `user_id`, nombre visible, fechas | Disparador al crear la cuenta |
-| `dispositivos_cuenta` | `(user_id, dispositivo_id)`, `reclamado_en`, `ultima_conexion` | `reclamar_dispositivo` / `desvincular_dispositivo` |
+| `dispositivos_cuenta` | `(user_id, dispositivo_id)`, `nombre` propio de la cuenta, `reclamado_en`, `ultima_conexion` | `reclamar_dispositivo` / `renombrar_dispositivo` / `desvincular_dispositivo` / `desvincular_todos_dispositivos` |
+| `storage.objects` (bucket `adjuntos`) | `{user_id}/{id}`, privado, tope de 10 MB y tipos permitidos | La app con el JWT de la cuenta; políticas por carpeta |
 | `dispositivos` (Etapa 10) | Id, token, nombre y push del teléfono | `registrar_dispositivo` |
 | `recordatorios`, `categorias`, `perfiles`, `ajustes`, `marcas` | `(user_id, id)` + el contenido en `payload` + `updated_at`, `deleted_at`, `revision`, `dispositivo_id`, `seq` | Solo `subir_cambios` |
 | `tumbas` | Índice de borrados por entidad, para no bajar la tabla entera | Solo `subir_cambios`; se limpia con `purgar_tumbas` |
@@ -71,7 +71,7 @@ Reglas:
 - Las copias de la Etapa 13/14 se pueden subir con sus ids: una fila con el mismo id se actualiza, no
   se duplica.
 
-### Fase 3 · Motor de sincronización (terminada; adjuntos y Realtime pendientes)
+### Fase 3 · Motor de sincronización (terminada)
 
 - `src/lib/sync.ts` guarda una **cola de salida por cuenta y dispositivo** en
   `localStorage` (`avispate.sync.v1`): operación con entidad, id, payload y hora. Es deliberado: el
@@ -92,16 +92,47 @@ Reglas:
 - **Disparadores:** 1,2 s después de un cambio local, cada 45 s mientras hay cuenta, y al volver la
   conexión (`online`). El botón «Sincronizar ahora» fuerza una pasada y muestra el resultado en la
   tarjeta **Sincronización**. Una pasada a la vez por pestaña.
-- **Adjuntos** en Supabase Storage: pendientes. Hoy viajan los payloads; una foto referenciada por
-  URL no se sube todavía. La fila que la referencia no debe llegar antes que el archivo, y esa parte
-  queda para la fase de adjuntos.
+- **Adjuntos:** el contenido no viaja en el payload de sincronización; viaja a Storage y el
+  recordatorio guarda la ruta en `attachments[].remoto`. Si la subida falla, el archivo sigue en
+  IndexedDB y queda en la cola local (`avispate.adjuntos.cola.v1`).
 
-### Fase 4 · Dispositivos y sesiones
+### Fase 4 · Dispositivos y sesiones (terminada)
 
-- La última conexión ya se actualiza con cada subida o bajada real; falta poder editar el nombre del
-  teléfono y un botón para cerrar sesión en uno o en todos.
-- Al cerrar sesión: conservar o borrar la copia local, con una explicación clara.
-- Realtime para que la lista se actualice cuando entra otro teléfono.
+- `0006_etapa15_dispositivos.sql`: nombre propio del teléfono dentro de la cuenta
+  (`dispositivos_cuenta.nombre`), `renombrar_dispositivo` y `desvincular_todos_dispositivos`. El
+  cierre de UN teléfono reutiliza `desvincular_dispositivo`; la siguiente pasada de ese equipo recibe
+  «dispositivo no vinculado» y el motor se apaga.
+- La tarjeta **Cuenta** muestra el nombre editable, la última conexión real y el botón de cerrar
+  sesión por teléfono. «Cerrar sesión en todos» desvincula todos los equipos y después pide
+  `/auth/v1/logout?scope=global`.
+- Al salir, la app pregunta una vez: **Conservar mis datos** o **Borrar la copia local**. Borrar
+  vacía localStorage (salvo la identidad del dispositivo), las dos bases de adjuntos y vuelve a los
+  valores de fábrica.
+- Si la nube rechaza este teléfono porque otro lo desvinculó, `sync.ts` devuelve `revocado: true`:
+  la sesión sigue abierta, el vínculo local se olvida y Ajustes ofrece «Vincular este teléfono» otra
+  vez.
+
+### Fase 5 · Adjuntos en Storage (terminada)
+
+- `0007_etapa15_adjuntos.sql`: bucket privado `adjuntos`, tope de 10 MB, lista de tipos permitidos y
+  cuatro políticas (`select`, `insert`, `update`, `delete`) que comparan la primera carpeta con
+  `auth.uid()`.
+- `src/lib/adjuntos.ts` habla con la API REST de Storage sin SDK: sube con `x-upsert`, pide URLs
+  firmadas de una hora, descarga, borra y lista. La cola local guarda los ids que no pudieron subir.
+- Al guardar un recordatorio con archivos, primero se guardan en IndexedDB y después se suben (si hay
+  sesión). Al abrir un adjunto que no está en el teléfono, se baja con URL firmada y se cachea.
+- El detalle dice **En la nube** o **Solo en este teléfono**. Ajustes cuenta los pendientes y permite
+  borrar copias huérfanas de Storage sin tocar las referenciadas.
+
+### Fase 6 · Realtime (terminada)
+
+- `0008_etapa15_realtime.sql` agrega las cinco tablas a la publicación `supabase_realtime` (idempotente).
+- `src/lib/tiempo-real.ts` abre un WebSocket directo (`/realtime/v1/websocket?vsn=1.0.0`), se une con
+  el JWT de la cuenta y pide `postgres_changes` de las cinco tablas filtrados por
+  `user_id=eq.{id}`. Tiene latido cada 25 s y reconexión con espera creciente.
+- Un aviso del socket dispara una pasada del motor con un respiro de 400 ms. El sondeo de 45 s sigue
+  como red de seguridad. La tarjeta de Sincronización muestra el estado del canal y la última tabla
+  que avisó.
 
 ## Reglas de conflicto (implementadas en la Fase 3)
 
@@ -120,24 +151,34 @@ Reglas:
 - El token del dispositivo se sigue guardando en el teléfono y se exige en el alta del vínculo.
 - La sesión (access + refresh) vive en `localStorage`; es el compromiso habitual de una SPA sin
   backend propio. Si más adelante se quiere cookie `HttpOnly`, hace falta un backend intermedio.
+- Storage replica la misma idea: bucket privado y políticas por carpeta (`auth.uid()`). El teléfono
+  pide URLs firmadas de una hora para mostrar un archivo; no hay URLs públicas permanentes.
+- Realtime no cambia los permisos: el canal se une con el JWT y las políticas `select` de las tablas
+  deciden qué filas pueden viajar.
 - Los secretos de proveedores siguen solo en Supabase; el bundle únicamente lleva la anon key.
 
 ## Pruebas
 
-- `tests/e2e-sync.mjs` (se descubre solo en `npm test`): subida inicial, bajada remota, mismo
-  `updated_at` con desempate por dispositivo, tumba remota, caída de red, borrado local y una cola de
-  205 recordatorios que se parte en tandas y se vuelve a bajar paginada.
-- `supabase/tests/0005_negativo.sql`: dos cuentas, RLS, token incorrecto, dispositivo no vinculado,
-  `anon`, borrado lógico y desempate por dispositivo en el servidor. Se ejecuta a mano con
-  `psql`/el SQL Editor después de aplicar la migración.
+- `tests/e2e-sync.mjs`: subida inicial, bajada remota, mismo `updated_at` con desempate por
+  dispositivo, tumba remota, caída de red, borrado local y una cola de 205 recordatorios que se parte
+  en tandas y se vuelve a bajar paginada.
+- `tests/e2e-dispositivos.mjs`: lista con última conexión, renombre, cierre remoto, cierre global,
+  conservar/borrar la copia local y el motor apagado cuando la nube rechaza el vínculo.
+- `tests/e2e-adjuntos.mjs`: bucket privado y políticas, estado «En la nube»/«Solo en este teléfono»,
+  descarga con URL firmada, cola de pendientes y limpieza de huérfanos.
+- `tests/e2e-tiempo-real.mjs`: join con JWT, cinco tablas filtradas por usuario, estado en Ajustes,
+  aviso que dispara una pasada y reconexión.
+- `supabase/tests/0005_negativo.sql` y `supabase/tests/0006_negativo.sql`: RLS, motor, dispositivos,
+  Storage y Realtime. Se ejecutan a mano con `psql`/el SQL Editor y terminan en `rollback`.
 - `npx tsc --noEmit` y `npm run build` tienen que quedar limpios; la batería usa el `dist/` recién
   construido y avisa si está viejo.
 
 ## Limitaciones conocidas
 
-- **Adjuntos:** las fotos referenciadas por URL todavía no se suben a Storage.
-- **Realtime:** no está conectado; entre pasadas, los cambios de otro teléfono pueden tardar hasta
-  45 s (o hasta que se pulse «Sincronizar ahora»).
+- **Adjuntos entre teléfonos:** el archivo se copia a Storage, pero la descarga se hace al abrir el
+  detalle; no hay una descarga masiva ni un botón para «guardar todo offline».
+- **Realtime:** si el WebSocket no está disponible, la app sigue con el sondeo de 45 s. El canal no
+  reemplaza al motor: solo lo despierta antes.
 - **Historial:** el conflicto perdedor no se guarda. Gana la regla LWW y el otro valor se sobrescribe.
 - **Purga de tumbas:** `purgar_tumbas` borra las filas y las marcas con más de 90 días. Un teléfono
   que estuvo más de 90 días sin abrir puede perder la noticia de un borrado antiguo y necesita una
@@ -152,6 +193,6 @@ Reglas:
   cuenta sea la persona dueña; los espacios compartidos llegan en la Etapa 17.
 - ¿La cuenta se puede borrar desde la app? Hace falta una función con `service_role` y una política
   de retención; por ahora se borra desde el panel de Supabase.
-- ¿Qué pasa con los datos locales al cerrar sesión? La Fase 4 propone preguntar una vez y recordar
-  la elección por dispositivo.
+- ¿Qué pasa con los datos locales al cerrar sesión? La Fase 4 ya pregunta **Conservar** o **Borrar**
+  después de salir; la elección no se recuerda: se vuelve a preguntar la próxima vez.
 

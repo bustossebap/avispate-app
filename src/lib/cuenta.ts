@@ -426,11 +426,19 @@ export async function asegurarSesion(
 
 // Cerrar sesión siempre funciona, aunque la nube no conteste: lo que importa es que este teléfono
 // deje de tener la llave. Los datos locales se quedan (modo invitado).
+//
+// `global` cierra la sesión en todos los dispositivos de la cuenta (`scope=global`): Supabase invalida
+// los refresh tokens, así que los otros teléfonos no pueden renovar el acceso. Se usa en «Cerrar
+// sesión en todos», después de desvincularlos para que además dejen de sincronizar.
 export async function cerrarSesion(
   sesion: Sesion | null,
+  opciones: { global?: boolean } = {},
 ): Promise<RespuestaCuenta> {
   if (sesion && cuentaDisponible() && typeof fetch === "function")
-    await pedirCuenta("/auth/v1/logout", { metodo: "POST", sesion })
+    await pedirCuenta(
+      `/auth/v1/logout${opciones.global ? "?scope=global" : ""}`,
+      { metodo: "POST", sesion },
+    )
   olvidarSesion()
   return { ok: true }
 }
@@ -502,8 +510,127 @@ export async function desvincularDispositivo(
   return { ok: true, sesion: activa }
 }
 
-// Los teléfonos vinculados a la cuenta. Es la primera mitad de la lista de dispositivos de la
-// Etapa 15; el cierre remoto de sesión llega cuando exista el motor de sincronización.
+// Renombrar un teléfono de la cuenta. El nombre es una etiqueta para reconocerlo en la lista; no
+// cambia la identidad del dispositivo ni su token. La función de la base comprueba que el teléfono
+// esté vinculado a quien llama.
+export async function renombrarDispositivo(
+  sesion: Sesion,
+  dispositivoId: string,
+  nombre: string,
+): Promise<RespuestaConSesion> {
+  const limpio = (nombre || "").trim()
+  if (!limpio || limpio.length > 40)
+    return {
+      ok: false,
+      error: "Escribí un nombre de hasta 40 caracteres.",
+      sesion,
+    }
+  const activa = await asegurarSesion(sesion)
+  if (!activa)
+    return {
+      ok: false,
+      error: "La sesión venció. Pedí un enlace nuevo para volver a entrar.",
+    }
+  const respuesta = await pedirCuenta("/rest/v1/rpc/renombrar_dispositivo", {
+    metodo: "POST",
+    sesion: activa,
+    cuerpo: { p_dispositivo: dispositivoId, p_nombre: limpio },
+  })
+  if (!respuesta.ok)
+    return {
+      ok: false,
+      error: explicarErrorCuenta(respuesta.error),
+      sesion: activa,
+    }
+  const datos = respuesta.datos as { ok?: unknown } | null
+  if (datos?.ok !== true)
+    return {
+      ok: false,
+      error: "La nube no confirmó el nuevo nombre. Probá de nuevo.",
+      sesion: activa,
+    }
+  return { ok: true, sesion: activa }
+}
+
+// Cerrar la sesión de OTRO teléfono: se borra su vínculo con la cuenta. La próxima vez que ese
+// equipo sincronice recibe «dispositivo no vinculado» y deja de subir y bajar. El access token que
+// tenga guardado vence solo (o se invalida con el cierre global).
+export async function revocarDispositivo(
+  sesion: Sesion,
+  dispositivoId: string,
+): Promise<RespuestaConSesion> {
+  const activa = await asegurarSesion(sesion)
+  if (!activa)
+    return {
+      ok: false,
+      error: "La sesión venció. Pedí un enlace nuevo para volver a entrar.",
+    }
+  const respuesta = await pedirCuenta(
+    "/rest/v1/rpc/desvincular_dispositivo",
+    {
+      metodo: "POST",
+      sesion: activa,
+      cuerpo: { p_dispositivo: dispositivoId },
+    },
+  )
+  if (!respuesta.ok)
+    return {
+      ok: false,
+      error: explicarErrorCuenta(respuesta.error),
+      sesion: activa,
+    }
+  const datos = respuesta.datos as { ok?: unknown } | null
+  if (datos?.ok !== true)
+    return {
+      ok: false,
+      error: "La nube no confirmó el cierre de esa sesión. Probá de nuevo.",
+      sesion: activa,
+    }
+  if (dispositivo().id === dispositivoId) olvidarVinculo()
+  return { ok: true, sesion: activa }
+}
+
+// «Cerrar sesión en todos»: primero se desvinculan todos los teléfonos (así ninguno puede seguir
+// sincronizando) y después se cierra la sesión global. El orden importa: la función de la base
+// necesita el access token vigente.
+export async function revocarTodosDispositivos(
+  sesion: Sesion,
+): Promise<RespuestaConSesion> {
+  const activa = await asegurarSesion(sesion)
+  if (!activa)
+    return {
+      ok: false,
+      error: "La sesión venció. Pedí un enlace nuevo para volver a entrar.",
+    }
+  const respuesta = await pedirCuenta(
+    "/rest/v1/rpc/desvincular_todos_dispositivos",
+    { metodo: "POST", sesion: activa, cuerpo: {} },
+  )
+  if (!respuesta.ok)
+    return {
+      ok: false,
+      error: explicarErrorCuenta(respuesta.error),
+      sesion: activa,
+    }
+  const datos = respuesta.datos as { ok?: unknown } | null
+  if (datos?.ok !== true)
+    return {
+      ok: false,
+      error: "La nube no confirmó el cierre en todos. Probá de nuevo.",
+      sesion: activa,
+    }
+  olvidarVinculo()
+  return { ok: true, sesion: activa }
+}
+
+// El motor llama a esto cuando la nube contesta que este teléfono ya no está vinculado (lo cerraron
+// desde otro equipo). La sesión sigue abierta para poder volver a vincularlo desde Ajustes.
+export function olvidarVinculoTelefono() {
+  olvidarVinculo()
+}
+
+// Los teléfonos vinculados a la cuenta. El nombre propio de la cuenta (0006) tiene prioridad sobre
+// el nombre genérico del dispositivo; si no hay ninguno, queda «Este dispositivo».
 export async function misDispositivos(sesion: Sesion): Promise<{
   ok: boolean
   datos?: DispositivoCuenta[]

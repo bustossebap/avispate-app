@@ -127,6 +127,8 @@ export function montar(bundle, seed = {}, opciones = {}) {
   // devuelve la nube sin un Supabase de verdad. El bundle usa `fetch` en el momento de llamar, así
   // que instalarlo acá antes de evaluar alcanza; la suite decide qué responder y anota las llamadas.
   if (opciones.fetch) window.fetch = opciones.fetch
+  // El tiempo real se prueba con un WebSocket de mentira: el bundle usa el global del navegador.
+  if (opciones.websocket) window.WebSocket = opciones.websocket
 
   // Avisos del navegador de mentira: se ve el permiso, se puede pedir y se cuentan los enviados.
   const sent = []

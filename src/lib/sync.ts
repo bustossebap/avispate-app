@@ -58,6 +58,9 @@ export type ResultadoSync = {
   ok: boolean
   error?: string
   sesion?: Sesion
+  // La nube dice que este teléfono ya no está vinculado a la cuenta (lo cerraron desde otro equipo).
+  // La app apaga el motor y deja la tarjeta en «Sin vincular» para poder volver a vincularlo.
+  revocado?: boolean
   cambios: CambioSync[]
   subidos: number
   bajados: number
@@ -382,6 +385,7 @@ type RespuestaRpc<T,> = {
   datos?: T
   error?: string
   sesion?: Sesion
+  revocado?: boolean
 }
 
 function urlNube() {
@@ -450,6 +454,8 @@ async function pedirRpc<T>(
         ok: false,
         error: explicarErrorSync(respuesta.status, texto),
         sesion: vigente,
+        revocado:
+          respuesta.status === 403 && /revocado|no vinculado/i.test(texto),
       }
     const datos = texto ? JSON.parse(texto) as T : undefined as T
     return { ok: true, datos, sesion: vigente }
@@ -509,6 +515,7 @@ async function bajarPaginas(
   error?: string
   cambios: CambioSync[]
   sesion?: Sesion
+  revocado?: boolean
 }> {
   const cambios: CambioSync[] = []
   const ignorar = new Set<string>()
@@ -526,6 +533,7 @@ async function bajarPaginas(
         error: respuesta.error,
         cambios,
         sesion: respuesta.sesion,
+        revocado: respuesta.revocado,
       }
 
     const filas = Array.isArray(respuesta.datos) ? respuesta.datos : []
@@ -606,6 +614,7 @@ export async function sincronizarCuenta({
         ok: false,
         error: bajada.error,
         sesion: bajada.sesion,
+        revocado: bajada.revocado,
         cambios,
         subidos: 0,
         bajados: 0,
@@ -662,6 +671,7 @@ export async function sincronizarCuenta({
           ok: false,
           error: respuesta.error,
           sesion: respuesta.sesion,
+          revocado: respuesta.revocado,
           cambios,
           subidos,
           bajados,
@@ -701,6 +711,7 @@ export async function sincronizarCuenta({
       ok: false,
       error: bajada.error,
       sesion: bajada.sesion,
+      revocado: bajada.revocado,
       cambios,
       subidos,
       bajados,

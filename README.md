@@ -19,7 +19,7 @@ Primera transformación del prototipo de Figma Make a una V1 funcional ejecutabl
 - Motor local que revisa los recordatorios al abrir la app y cada minuto mientras está abierta.
 - Notificaciones del navegador cuando el permiso está concedido.
 - Selección de WhatsApp como canal, con envío real por la Cloud API de Meta (plantilla de utilidad) y correo por Resend.
-- Número de WhatsApp con extensión de país en bandera (Chile 🇨🇱 por defecto).
+- Número de WhatsApp con bandera y prefijo completo, incluido el 9 de celular (Chile 🇨🇱 +56 9 por defecto).
 - Cada usuario del dispositivo con su nombre, su emoji (de la rejilla o de la lista completa de emojis), su foto, sus canales y sus calendarios.
 - Categorías propias: agregar, reordenar y eliminar desde Inicio (o al crear un recordatorio), eligiendo al eliminar si sus recordatorios se borran o quedan sin categoría.
 - Repeticiones por horas, días, semanas, meses o años (y personalizadas).
@@ -33,7 +33,7 @@ Primera transformación del prototipo de Figma Make a una V1 funcional ejecutabl
 - Posponer desde la notificación: «Posponer 10 min» o «Posponer 1 hora» mueve el aviso en la nube sin abrir la app.
 - Salud de la cola (Ajustes): cuántos avisos hay en este teléfono, qué tiene la nube y cuándo se subió por última vez, con «Revisar ahora».
 - Entrega real (Ajustes): estado de WhatsApp y correo, botones «Probar», últimos envíos con canal y estado, y el motivo cuando el proveedor falla. Las filas de la cola viajan por canal con destino, usuario y zona horaria; los secretos viven solo en Supabase.
-- Cuenta opcional (Etapa 15, fases 1–3): enlace mágico por correo, sesión que se recuerda en el teléfono, vínculo del dispositivo y sincronización de recordatorios, categorías, perfiles, ajustes y marcas entre teléfonos de la misma cuenta, con RLS por usuario. El modo invitado no cambia; los adjuntos y Realtime todavía no viajan.
+- Cuenta opcional (Etapa 15, fases 1–6): enlace mágico por correo, sesión que se recuerda en el teléfono, vínculo del dispositivo, sincronización de recordatorios, categorías, perfiles, ajustes y marcas entre teléfonos de la misma cuenta, adjuntos en Storage, Realtime y lista de dispositivos con renombre y cierre remoto. El modo invitado no cambia.
 - Deshacer cualquier borrado: recordatorios, adjuntos, categorías (en sus dos salidas) y usuarios completos, desde el aviso que aparece abajo.
 - Espacio en el dispositivo (Ajustes): cuánto ocupan los textos, las fotos y las notas de voz, y un botón para liberar los archivos que ya no usa ningún recordatorio.
 
@@ -79,7 +79,8 @@ IP de la red.
 
 La batería E2E vive **dentro del proyecto** (`tests/`): monta el bundle real dentro de jsdom y recorre la
 app como si alguien la tocara —onboarding, crear y editar recordatorios, calendarios, archivos, usuarios,
-borrar y deshacer, Ajustes, tips—. Son **19 suites y 930 comprobaciones**.
+borrar y deshacer, Ajustes, tips, cuenta, dispositivos, adjuntos en Storage y Realtime—. Son **22
+suites y 987 comprobaciones**.
 
 ```bash
 npm run build        # la batería prueba dist/: si está viejo, se avisa y no corre
@@ -201,7 +202,7 @@ Ajustes pedidos después de la Etapa 2.
 - **Sin teclado automático**: los pasos del nombre y del contacto ya no usan `autoFocus`, así en el teléfono el teclado no se abre solo al llegar al penúltimo slide (el foco se queda donde estaba y el usuario decide cuándo escribir).
 - **Slide 5**: la descripción pasa a «Recordar también es cuidar. Crea recordatorios para la familia, tus amigos o incluso para tu empresa.»
 - **Canales de contacto a la vista** (Ajustes › Usuarios de este dispositivo): cada usuario muestra los canales por los que puede recibir avisos —**logo real de WhatsApp** y correo— encendidos si están listos y apagados (en gris) si le faltan. Cada insignia dice de quién es y en qué estado está.
-- **Ticket para aceptar el contacto** (Ajustes › Contacto): cuando el usuario deja su número o su correo aparece un ticket («Acepto que AVISPATE use estos datos…») que hay que marcar. Mientras falte, los datos figuran como «Por confirmar», los avisos por WhatsApp y correo quedan **en pausa** (el motor cae en notificación, y Crear lo avisa) y la lista de usuarios muestra el canal apagado. Al cambiar un dato el ticket se destilda solo, para volver a aceptarlo. Los contactos guardados antes de esta etapa se toman como aceptados, así nadie pierde sus avisos.
+- **Ticket para aceptar el contacto** (Ajustes › Contacto): cuando el usuario deja su número o su correo aparece un ticket («Acepto que AVISPATE use estos datos…») que hay que marcar. Mientras falte, los datos figuran como «Por confirmar», los avisos por WhatsApp y correo quedan **en pausa** (el motor cae en notificación, y Crear lo avisa) y la lista de usuarios muestra el canal apagado. Al cambiar un dato el ticket se destilda solo, para volver a aceptarlo. Los contactos guardados antes de esta etapa se toman como aceptados, así nadie pierde sus avisos. En la Etapa 15 el ticket se reemplazó por el botón **Confirmar datos** / **Editar datos**; los datos guardados siguen tomándose como aceptados y la pausa por datos sin confirmar se mantiene.
 - **«Eliminar» de usuarios ya borra**: el botón pedía confirmación pero solo limpiaba recordatorios y avisos; el perfil quedaba en la lista. Ahora el segundo toque borra también el perfil (su nombre, su emoji, su contacto, sus canales y su Google Calendar) y, si era el usuario activo, el mando pasa al que queda. El último usuario no se puede borrar.
 
 ## Etapa 4: hora que no se mueve, Google por usuario y aviso de inactividad
@@ -245,7 +246,8 @@ Los once ajustes pedidos después de la Etapa 5 —ocho correcciones de interfaz
 - **Ajustes › los tres calendarios en una sola burbuja**: el desplegable «Calendarios de …» es **una sola burbuja blanca** y no una tarjeta con otra tarjeta suelta debajo: el encabezado (los tres logos + el resumen de qué hay conectado) y el contenido —Google Calendar, Apple Calendar y Outlook, cada uno en su sección y separados por líneas— viven **dentro de la misma burbuja**, que se abre y se cierra con su encabezado. Al fondo del contenido hay además una **flecha para cerrarla**, el mismo gesto que la burbuja del onboarding, así no hace falta volver arriba para plegarla.
 - **Ajustes empieza por «Mi perfil»**: las dos primeras secciones quedaron ordenadas como se pidió —**1) Mi perfil** (la tarjeta del usuario activo, con «Editar») y **2) Apariencia** (modo oscuro y formato de hora de los avisos)—, así lo primero que se ve al entrar en Ajustes es de quién son los datos que se editan ahí.
 - **Agregar desde una categoría vacía**: al mirar una categoría sin recordatorios y tocar «Agregar recordatorio», el formulario abre con **esa categoría ya elegida** (y se guarda así). El «+» de la barra inferior sigue siendo neutro, como antes.
-- **Extensión de país en el número de WhatsApp**: el número se escribe en dos campos, un **menú de extensión de país** (21 países, **Chile `+56` por defecto**) y el número local. Se sigue guardando completo (`+56 9 1234 5678`) dentro del contacto del usuario, así valen igual el ticket, los avisos y lo que ya estaba guardado; al abrir el editor, la extensión se lee del número guardado. Está en el último paso del onboarding y en **Ajustes › Contacto**. En la segunda revisión ese menú quedó **chico y con la bandera sola** (🇨🇱, 🇦🇷, 🇺🇸…): el nombre del país no se gasta en la pantalla —se lee al abrir la lista y en el texto que aparece al pasar el dedo— y **el número se queda con todo el ancho**, así se ve completo (`+56 9 1234 5678`) junto con su estado («✓ Conectado» / «Por confirmar»), que vive en la línea del título —igual que el del correo electrónico, en la línea de «Correo electrónico»— para no robarle lugar al dato.
+- **Extensión de país en el número de WhatsApp**: el número se escribe en dos campos, un **menú de extensión de país** (21 países, **Chile `+56 9` por defecto**) y el número local. El menú muestra **bandera y prefijo completo** (🇨🇱 +56 9) y el nombre del país se lee al abrir la lista o al pasar el dedo. El **9 de celular** de Chile —y el de Argentina, Ecuador, Paraguay, Perú, Portugal y Uruguay— va en el prefijo, no se escribe a mano; si alguien lo vuelve a escribir, se quita sin duplicarlo. Se guarda completo (`+56 9 1234 5678`) dentro del contacto del usuario, así valen igual los avisos y lo que ya estaba guardado; al abrir el editor, la extensión se lee del número guardado. Está en el último paso del onboarding y en **Ajustes › Contacto**.
+- **Contacto de Ajustes, más simple**: los íconos de WhatsApp y correo pasaron a ser **chiquitos, a la izquierda de cada título**, y se fueron los cuadros grandes que robaban ancho. El estado («✓ Conectado» / «Por confirmar») sigue a la derecha del título. La aceptación ya no es un ticket: debajo de los datos hay un **botón grande «Confirmar datos»** y el consentimiento como texto; al confirmar, los campos quedan **grises y bloqueados** y el botón pasa a **«Editar datos»**. Editar sin confirmar deja los avisos por WhatsApp y correo en pausa hasta que se confirme otra vez.
 - **Las seis insignias de cada usuario, en una sola línea**: cada fila («Usuarios de este dispositivo» en Ajustes y **Usuarios locales** en Inicio) muestra su **campana de notificaciones**, sus **dos canales de contacto** (WhatsApp y correo) **y sus tres calendarios**, todas juntas y **sin envolverse**: en Ajustes van en **su propia línea a todo lo ancho de la tarjeta**, alineadas con el nombre y por fuera del botón de eliminar (la fila de arriba es angosta: avatar + nombre + «Eliminar»), y en el desplegable de Inicio van en la misma fila del nombre, chicas. Cada insignia dice de quién es y si está encendida, con el mismo criterio con el que la app manda avisos (canal encendido y, en WhatsApp y correo, el dato y el ticket de contacto); como Inicio y Ajustes usan la misma función, las dos listas dicen exactamente lo mismo de cada persona.
 - **Categorías propias: agregar, ordenar y eliminar**: al final del carrusel de categorías de Inicio hay dos chips —**「＋ Nueva」** y **「✎ Editar」**, punteados y en ámbar para leerse como acciones y no como categorías— y en **Nuevo recordatorio** aparece el mismo **«＋ Nueva»**.
   - La lista vive en el dispositivo con su propia clave (`avispate.categorias.v1`); sin nada guardado se usan las de siempre (**Auto, Documentos, Hogar, Finanzas, Trabajo, Personal, Mantención y Otros**), así nadie pierde lo suyo al actualizar.
@@ -530,17 +532,17 @@ botones de prueba, el modo sin red, la migración y las dos Edge Functions). La 
 ## Etapa 15: cuenta y sincronización (V2.1)
 
 La Etapa 15 es la más grande del roadmap —cuenta, sincronización, adjuntos en la nube y lista de
-dispositivos—, así que se entrega por fases. Las fases 1, 2 y 3 ya están terminadas: la cuenta, el
-esquema por entidad y el motor de sincronización funcionan. Quedan la lista de dispositivos con cierre
-remoto (fase 4), los adjuntos en Storage y Realtime.
+dispositivos— y quedó **terminada en sus seis fases**: la cuenta, el esquema por entidad, el motor de
+sincronización, la lista de dispositivos con cierre remoto, los adjuntos en Storage y Realtime.
 
 - **Enlace mágico, sin contraseña.** `src/lib/cuenta.ts` pide el enlace a Supabase Auth, procesa la
   vuelta con los tokens en el hash, pide la cuenta con `GET /auth/v1/user`, guarda la sesión en el
   teléfono y limpia el hash. Si el enlace venció, lo explica; si no hay red, no rompe nada. La sesión
   se renueva sola un minuto antes de vencer y **no** viaja dentro de las copias de seguridad.
 - **La cuenta es opcional.** El onboarding no la pide. Ajustes → *Cuenta* muestra el correo, el
-  estado del vínculo y los teléfonos vinculados; «Cerrar sesión» deja los recordatorios locales y
-  vuelve al modo invitado.
+  estado del vínculo y los teléfonos vinculados, con su última conexión. Cada uno se puede renombrar o
+  cerrar desde otro equipo; «Cerrar sesión en todos» desvincula la lista y cierra la sesión global de
+  Supabase. Al salir, la app pregunta si conservar o borrar la copia local.
 - **Vincular este teléfono.** `reclamar_dispositivo` exige `auth.uid()` y el token del dispositivo (el
   id solo no alcanza), y `desvincular_dispositivo` borra únicamente el vínculo de quien llama.
 - **RLS de verdad.** `perfiles_cuenta`, `dispositivos_cuenta` y las cinco entidades sincronizadas
@@ -554,21 +556,30 @@ remoto (fase 4), los adjuntos en Storage y Realtime.
 - **Bajada y conflictos.** `bajar_cambios` devuelve las filas con `seq` mayor que el cursor, incluidas
   las tumbas. La regla es la misma en cliente y servidor: gana `updated_at`; si empatan,
   `dispositivo_id`; si también empatan, `md5(payload)`. Una hora futura se acota a «ahora».
-- **Cuándo sincroniza.** 1,2 s después de un cambio local, cada 45 s mientras hay cuenta y al volver
-  la conexión. «Sincronizar ahora» fuerza una pasada y muestra el resultado en la tarjeta
-  **Sincronización**. Sin cuenta o sin red, la app sigue siendo local y no se rompe nada.
-- **Todavía no.** La Fase 4 agrega nombre editable, cierre remoto y la decisión de conservar o borrar
-  la copia local al salir. Los adjuntos siguen en el teléfono que los agregó: el payload viaja, pero
-  el archivo todavía no se sube a Storage. Realtime tampoco está conectado; por eso hay sondeo cada
-  45 s.
+- **Cuándo sincroniza.** 1,2 s después de un cambio local, cada 45 s mientras hay cuenta, al volver
+  la conexión y cuando Realtime avisa que otro teléfono escribió. «Sincronizar ahora» fuerza una
+  pasada y muestra el resultado en la tarjeta **Sincronización**. Sin cuenta o sin red, la app sigue
+  siendo local y no se rompe nada.
+- **Adjuntos.** `src/lib/adjuntos.ts` usa la API REST de Storage sin SDK: sube a
+  `{user_id}/{id}`, pide URLs firmadas de una hora para mostrarlos y borra la copia remota cuando se
+  quita el adjunto. El bucket es privado, de 10 MB y con tipos permitidos. Si no hay red, el archivo
+  queda en IndexedDB y en la cola local; el detalle dice **En la nube** o **Solo en este teléfono**.
+- **Realtime.** `src/lib/tiempo-real.ts` abre un WebSocket directo al Realtime de Supabase, se une con
+  el JWT de la cuenta y escucha las cinco tablas filtradas por `user_id`. El sondeo de 45 s sigue como
+  red de seguridad y la tarjeta muestra si el canal está conectado o reconectando.
 
-La migración nueva es `0005_etapa15_datos.sql` (ya aplicada al proyecto, junto con `0004_etapa15.sql`)
-y la guía de Auth, RLS y sincronización está en `supabase/README.md`. Las suites de la etapa son
-`tests/e2e-cuenta.mjs` (54 comprobaciones de identidad, vínculo y sesión) y `tests/e2e-sync.mjs` (36:
-subida inicial, bajada remota, desempate por dispositivo, tumbas, caída de red, recuperación de la cola
-pendiente y un lote de 205 cambios que se parte y se vuelve a bajar paginado). La prueba negativa de
-`supabase/tests/0005_negativo.sql` se corre contra el proyecto y se revierte. La batería pasa de 894 a
-**930**.
+Las migraciones nuevas son `0004` a `0008` (ya aplicadas al proyecto) y la guía de Auth, RLS,
+Storage y Realtime está en `supabase/README.md`. Las suites de la etapa son `tests/e2e-cuenta.mjs`
+(54 comprobaciones de identidad, vínculo y sesión), `tests/e2e-sync.mjs` (36: subida inicial, bajada
+remota, desempate por dispositivo, tumbas, caída de red y un lote de 205 cambios),
+`tests/e2e-dispositivos.mjs` (27: renombre, cierre remoto/global y copia local),
+`tests/e2e-adjuntos.mjs` (14: Storage, URLs firmadas y huérfanos) y `tests/e2e-tiempo-real.mjs` (14:
+join, aviso y reconexión). Las pruebas negativas `supabase/tests/0005_negativo.sql` y
+`0006_negativo.sql` se corren contra el proyecto y se revierten. La batería pasa de 930 a **987**.
+
+La Etapa 16 (calendarios reales) queda bloqueada hasta tener credenciales OAuth de Google, Apple y
+Microsoft; el detalle de lo que hace falta está en
+[`docs/etapa16-calendarios.md`](docs/etapa16-calendarios.md).
 
 ## Roadmap: de la V2.1 a la V3.1
 
@@ -737,10 +748,10 @@ documentados y queda el informe de lanzamiento con lo aprendido y el roadmap de 
 Apps de escritorio nativas, SSO empresarial y consola de administración, un asistente con IA que invente
 recordatorios, publicidad y un mercado de plantillas. Si alguna entra, será una etapa nueva con su propio
 número: este roadmap termina en la V3.1, con AVISPATE instalable, sincronizada, colaborativa y en las
-tiendas. La Etapa 15 ya tiene la cuenta, el esquema por entidad y el motor de sincronización; le siguen
-la Fase 4 (dispositivos y sesiones), los adjuntos en Storage y Realtime. Conviene iniciar ya las
-verificaciones externas que tardan (cuenta de Meta Business, dominio y proveedor de correo) para que no
-frenen el código; la Etapa 14 ya está lista para usarlas.
+tiendas. La Etapa 15 ya está completa: cuenta, esquema por entidad, motor de sincronización,
+dispositivos y sesiones, adjuntos en Storage y Realtime. La Etapa 16 (calendarios) necesita
+credenciales OAuth de Google, Apple y Microsoft; conviene iniciar ya esas verificaciones externas
+—y las de Meta Business, dominio y proveedor de correo— para que no frenen el código.
 
 ## Preguntas sobre el permiso de notificaciones y el aviso de inactividad
 

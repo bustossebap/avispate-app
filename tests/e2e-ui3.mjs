@@ -386,14 +386,13 @@ const seedBase = (extra) => ({
     JSON.stringify(filaWA?.textContent),
   )
   check(
-    "O1 · y el número se escribe con su extensión de país al lado, Chile por defecto",
-    m.input("onboarding-phone")?.getAttribute("placeholder") ===
-      "9 1234 5678" &&
+    "O1 · el número se escribe con su extensión y el 9 del celular ya puestos",
+    m.input("onboarding-phone")?.getAttribute("placeholder") === "1234 5678" &&
       extWA()?.value === "+56" &&
       (
         [...(extWA()?.options || [])].find((o) => o.value === "+56")
           ?.textContent || ""
-      ).trim() === "🇨🇱" &&
+      ).trim() === "🇨🇱 +56 9" &&
       !(extWA()?.textContent || "").includes("Chile") &&
       m.txt().includes("Número de WhatsApp"),
   )

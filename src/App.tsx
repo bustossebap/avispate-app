@@ -25,6 +25,14 @@ import {
 } from "./lib/avisos"
 import { buscarRecordatorios, hayConsulta } from "./lib/buscar"
 import {
+  borrarAdjuntoRemoto,
+  colaAdjuntos,
+  desencolarAdjunto,
+  descargarAdjunto,
+  limpiarAdjuntosRemotos,
+  subirAdjunto,
+} from "./lib/adjuntos"
+import {
   resumenSincronizacion,
   sincronizarCuenta,
   type CambioSync,
@@ -34,14 +42,23 @@ import {
 } from "./lib/sync"
 import { programarAvisos, type AvisoProgramado } from "./lib/cola"
 import {
+  conectarTiempoReal,
+  explicarEstadoTiempoReal,
+  type EstadoTiempoReal,
+} from "./lib/tiempo-real"
+import {
   asegurarSesion,
   cerrarSesion,
   desvincularDispositivo,
   enviarEnlace,
   leerSesion,
   misDispositivos,
+  olvidarVinculoTelefono,
   procesarEnlaceCuenta,
   reclamarDispositivo,
+  renombrarDispositivo,
+  revocarDispositivo,
+  revocarTodosDispositivos,
   vinculadoEnEsteTelefono,
   type DispositivoCuenta,
   type Sesion,
@@ -165,6 +182,10 @@ interface AttachmentMeta {
   name: string
   type: string
   size: number
+  // Ruta en el bucket privado (`{user_id}/{id}`) cuando el archivo ya está en la nube. Si falta, el
+  // adjunto vive solo en este teléfono; la app lo sube al vincular la cuenta o en la próxima pasada.
+  remoto?: string
+  remotoEn?: string
 }
 
 interface AppNotification {
@@ -430,15 +451,27 @@ const EMOJI_GROUPS: { tab: string ;name: string ;emojis: string[] }[] = [
 // Cada país lleva su bandera: el cuadro de la extensión quedó chico —una bandera y nada más— para
 // dejarle el ancho al número, así que la bandera es lo que se ve y el nombre (+56 Chile) se lee al
 // abrir la lista o al pasar el dedo por el cuadro.
-const COUNTRY_CODES: { code: string ;name: string ;flag: string }[] = [
-  { code: "+56", name: "Chile", flag: "🇨🇱" },
-  { code: "+54", name: "Argentina", flag: "🇦🇷" },
+const COUNTRY_CODES: {
+  code: string
+  name: string
+  flag: string
+  // El dígito que va entre la extensión y el número en los celulares de ese país. Chile usa 9
+  // (+56 9 …), y lo mismo pasa en Argentina, Ecuador, Paraguay, Perú, Portugal y Uruguay. Solo se
+  // pone donde el prefijo móvil es fijo: en los demás el número ya empieza por el dígito que
+  // corresponde y agregarlo confundiría.
+  mobile?: string
+  // Cuántos dígitos quedan después de quitar ese prefijo. Sirve para no confundir un número local
+  // que empieza por 9 (por ejemplo 9999 8888 en Chile) con alguien que volvió a escribir el 9.
+  localDigits?: number
+}[] = [
+  { code: "+56", name: "Chile", flag: "🇨🇱", mobile: "9", localDigits: 8 },
+  { code: "+54", name: "Argentina", flag: "🇦🇷", mobile: "9", localDigits: 10 },
   { code: "+591", name: "Bolivia", flag: "🇧🇴" },
   { code: "+55", name: "Brasil", flag: "🇧🇷" },
   { code: "+57", name: "Colombia", flag: "🇨🇴" },
   { code: "+506", name: "Costa Rica", flag: "🇨🇷" },
   { code: "+53", name: "Cuba", flag: "🇨🇺" },
-  { code: "+593", name: "Ecuador", flag: "🇪🇨" },
+  { code: "+593", name: "Ecuador", flag: "🇪🇨", mobile: "9", localDigits: 8 },
   { code: "+503", name: "El Salvador", flag: "🇸🇻" },
   { code: "+34", name: "España", flag: "🇪🇸" },
   { code: "+1", name: "Estados Unidos", flag: "🇺🇸" },
@@ -447,10 +480,10 @@ const COUNTRY_CODES: { code: string ;name: string ;flag: string }[] = [
   { code: "+52", name: "México", flag: "🇲🇽" },
   { code: "+505", name: "Nicaragua", flag: "🇳🇮" },
   { code: "+507", name: "Panamá", flag: "🇵🇦" },
-  { code: "+595", name: "Paraguay", flag: "🇵🇾" },
-  { code: "+51", name: "Perú", flag: "🇵🇪" },
-  { code: "+351", name: "Portugal", flag: "🇵🇹" },
-  { code: "+598", name: "Uruguay", flag: "🇺🇾" },
+  { code: "+595", name: "Paraguay", flag: "🇵🇾", mobile: "9", localDigits: 8 },
+  { code: "+51", name: "Perú", flag: "🇵🇪", mobile: "9", localDigits: 8 },
+  { code: "+351", name: "Portugal", flag: "🇵🇹", mobile: "9", localDigits: 8 },
+  { code: "+598", name: "Uruguay", flag: "🇺🇾", mobile: "9", localDigits: 7 },
   { code: "+58", name: "Venezuela", flag: "🇻🇪" },
 ]
 // El país elegido, con su nombre: se usa para el texto que se lee al pasar el dedo por el cuadro de la
@@ -460,9 +493,31 @@ function countryOf(code: string) {
   return COUNTRY_CODES.find((c) => c.code === code) ?? COUNTRY_CODES[0]
 }
 const DEFAULT_COUNTRY = "+56"
+// El prefijo completo que se ve en el cuadro del país: bandera, extensión y —cuando corresponde— el
+// dígito de celular. Así «+56 9» queda a la vista y la persona no tiene que escribirlo de nuevo.
+function countryPrefix(country: { code: string; flag: string; mobile?: string }) {
+  return `${country.flag} ${country.code}${country.mobile ? ` ${country.mobile}` : ""}`
+}
+// Quita el dígito móvil del principio de un número local, para no duplicarlo cuando alguien lo
+// escribe igual que lo ve en el prefijo (por ejemplo «9 1234 5678» en Chile).
+function sinPrefijoMovil(country: string, local: string) {
+  const numero = (local || "").replace(/^[\s-]+/, "")
+  const datos = countryOf(country)
+  const movil = datos.mobile
+  if (!movil || !numero.startsWith(movil)) return (local || "").trim()
+  const digitos = numero.replace(/\D/g, "").length
+  // Solo se quita si hay más dígitos que un número local: «9 1234 5678» (9) sí; «9999 8888» (8)
+  // es un número local que empieza por 9 y se conserva tal cual.
+  if (datos.localDigits && digitos <= datos.localDigits)
+    return (local || "").trim()
+  const resto = numero.slice(movil.length)
+  return resto.replace(/\D/g, "") ? resto.trim() : (local || "").trim()
+}
 // Un número guardado se parte en extensión + número local. Los que se escribieron antes, sin
-// extensión, se toman como chilenos: Chile es el público del producto y así no se rompe nada.
-function splitPhone(phone: string): { country: string ;local: string } {
+// extensión, se toman como chilenos: Chile es el público del producto y así no se rompe nada. Si el
+// número guardado ya trae el dígito móvil, se quita de la parte editable: el prefijo lo muestra el
+// cuadro del país y el campo se queda solo con lo que la persona tiene que escribir.
+function splitPhone(phone: string): { country: string; local: string } {
   const value = (phone || "").trim()
   if (!value) return { country: DEFAULT_COUNTRY, local: "" }
   if (!value.startsWith("+")) return { country: DEFAULT_COUNTRY, local: value }
@@ -471,12 +526,24 @@ function splitPhone(phone: string): { country: string ;local: string } {
     .sort((a, b) => b.code.length - a.code.length)
     .find((c) => value.startsWith(c.code))
   if (!found) return { country: DEFAULT_COUNTRY, local: value }
-  return { country: found.code, local: value.slice(found.code.length).trim() }
+  const resto = value.slice(found.code.length).trim()
+  const movil = found.mobile
+  if (movil && resto.startsWith(movil)) {
+    const digitos = resto.replace(/\D/g, "").length
+    const sinMovil = resto.slice(movil.length)
+    if (
+      sinMovil.replace(/\D/g, "") &&
+      (!found.localDigits || digitos > found.localDigits)
+    )
+      return { country: found.code, local: sinMovil.trim() }
+  }
+  return { country: found.code, local: resto }
 }
 function joinPhone(country: string, local: string) {
-  const number = (local || "").trim()
-  if (!number) return ""
-  return `${country} ${number}`
+  const numero = sinPrefijoMovil(country, local)
+  if (!numero.replace(/\D/g, "")) return ""
+  const movil = countryOf(country).mobile
+  return `${country} ${movil ? `${movil} ` : ""}${numero}`
 }
 
 // Opciones de «¿Cuándo se repite?»: las nuevas incluyen las de horas (lo pedido en la Etapa 6) y quitan
@@ -728,6 +795,23 @@ async function deleteAttachment(id: string) {
     })
     db.close()
   } catch {}
+}
+// Borrar la copia local de verdad (después de cerrar sesión): vacía las dos bases de adjuntos que
+// puede haber —la actual y la heredada del renombre—. Si IndexedDB no está disponible, se sigue: las
+// claves de localStorage se borran igual y la app no se queda trabada.
+async function borrarTodosLosAdjuntos() {
+  for (const nombre of [ATTACHMENT_DB, LEGACY_ATTACHMENT_DB]) {
+    try {
+      const db = await openAttachmentDB(nombre)
+      await new Promise<void>((resolve, reject) => {
+        const tx = db.transaction(ATTACHMENT_STORE, "readwrite")
+        tx.objectStore(ATTACHMENT_STORE).clear()
+        tx.oncomplete = () => resolve()
+        tx.onerror = () => reject(tx.error)
+      })
+      db.close()
+    } catch {}
+  }
 }
 type InventarioAdjuntos = {
   total: number
@@ -2376,12 +2460,13 @@ function EmojiPicker({
   )
 }
 
-// Extensión de país + número de WhatsApp: el "+56" (Chile, por defecto) se elige de la lista y el
-// número se escribe aparte. Se guarda junto ("+56 9 1234 5678") para que todos los lugares que ya leen
-// el contacto —el ticket, los avisos, lo guardado antes— sigan funcionando igual.
-// El cuadro de la extensión quedó chico y con la bandera sola: el nombre del país no se gasta en la
-// pantalla (se lee al abrir la lista o al pasar el dedo por el cuadro) y el número tiene todo el ancho
-// para verse completo, que es lo que de verdad hay que leer ahí.
+// Extensión de país + número de WhatsApp: el prefijo (Chile «+56 9» por defecto) se elige de la lista
+// y el número se escribe aparte, sin volver a teclear el dígito de celular. Se guarda junto
+// ("+56 9 1234 5678") para que todos los lugares que ya leen el contacto —el ticket, los avisos, lo
+// guardado antes— sigan funcionando igual.
+// El cuadro del país muestra bandera y prefijo completo (incluido el 9 donde corresponde), y el nombre
+// del país se lee al abrir la lista o al pasar el dedo. Así se gana el ancho que antes ocupaban los
+// cuadros grandes de WhatsApp y correo.
 function PhoneField({
   id,
   value,
@@ -2417,26 +2502,27 @@ function PhoneField({
     lastValue.current = next
     onChange(next)
   }
+  const elegido = countryOf(country)
   return (
     <div className="flex items-center gap-2 min-w-0 flex-1">
-      {/* La extensión: un cuadro chico con la bandera. La flechita es la nuestra (aparece-none) para que
-        el cuadro pueda ser estrecho sin que el navegador le meta su propio espacio. */}
+      {/* Bandera + prefijo en un solo cuadro. La flechita es la nuestra (appearance-none) para que el
+          navegador no sume espacio propio y el prefijo entre completo. */}
       <span className="relative flex-shrink-0">
         <select
           aria-label="Extensión de país"
-          title={`${countryOf(country).flag} ${country} ${countryOf(country).name}`}
+          title={`${elegido.flag} ${elegido.name} ${countryPrefix(elegido)}`}
           value={country}
           disabled={disabled}
           onChange={(e) => pickCountry(e.target.value)}
-          className="appearance-none w-[62px] pl-2 pr-5 py-4 rounded-2xl bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-700 text-[19px] font-semibold text-stone-700 dark:text-stone-200 outline-none focus:border-amber-400"
+          className="appearance-none w-[112px] pl-2 pr-5 py-4 rounded-2xl bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-700 text-[14px] font-semibold text-stone-700 dark:text-stone-200 outline-none focus:border-amber-400 disabled:bg-stone-100 dark:disabled:bg-stone-800 disabled:text-stone-400"
         >
           {COUNTRY_CODES.map((c) => (
             <option
               key={c.name}
               value={c.code}
-              title={`${c.flag} ${c.code} ${c.name}`}
+              title={`${c.flag} ${c.name} ${countryPrefix(c)}`}
             >
-              {c.flag}
+              {countryPrefix(c)}
             </option>
           ))}
         </select>
@@ -2464,8 +2550,8 @@ function PhoneField({
         maxLength={16}
         disabled={disabled}
         onChange={(e) => typeNumber(e.target.value)}
-        placeholder="9 1234 5678"
-        className="flex-1 min-w-0 px-4 py-4 rounded-2xl bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-700 text-[16px] font-semibold text-stone-800 dark:text-stone-100 placeholder:text-stone-300 dark:placeholder:text-stone-600 outline-none focus:border-amber-400 focus:ring-2 focus:ring-amber-200"
+        placeholder="1234 5678"
+        className="flex-1 min-w-0 px-4 py-4 rounded-2xl bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-700 text-[16px] font-semibold text-stone-800 dark:text-stone-100 placeholder:text-stone-300 dark:placeholder:text-stone-600 outline-none focus:border-amber-400 focus:ring-2 focus:ring-amber-200 disabled:bg-stone-100 dark:disabled:bg-stone-800 disabled:text-stone-400 disabled:border-stone-100 dark:disabled:border-stone-800"
       />
     </div>
   )
@@ -5692,6 +5778,7 @@ function DetailScreen({
   onRemoveAttachment,
   onCalendar,
   clock12,
+  cuenta,
 }: {
   event: Reminder
   onBack: () => void
@@ -5701,6 +5788,7 @@ function DetailScreen({
   onRemoveAttachment: (attachmentId: string) => void
   onCalendar: (app: CalendarApp) => void
   clock12: boolean
+  cuenta: Sesion | null
 }) {
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [attachmentUrls, setAttachmentUrls] = useState<Record<string, string>>(
@@ -5714,7 +5802,20 @@ function DetailScreen({
     const load = async () => {
       const next: Record<string, string> = {}
       for (const a of event.attachments ?? []) {
-        const blob = await getAttachment(a.id)
+        let blob = await getAttachment(a.id)
+        // Si el archivo ya no está en este teléfono pero sí en la nube (otro teléfono lo subió), se
+        // baja con una URL firmada y se guarda en IndexedDB para la próxima vez.
+        if (!blob && a.remoto && cuenta) {
+          const remoto = await descargarAdjunto(cuenta, a.remoto)
+          if (remoto.ok && remoto.blob) {
+            blob = remoto.blob
+            // Si el navegador no deja guardar en IndexedDB, el archivo se muestra igual desde la
+            // descarga recién hecha; no se pierde la vista por no poder cachearlo.
+            try {
+              await saveAttachment(a.id, blob)
+            } catch {}
+          }
+        }
         if (blob) next[a.id] = URL.createObjectURL(blob)
       }
       if (alive) setAttachmentUrls(next)
@@ -5725,7 +5826,7 @@ function DetailScreen({
       alive = false
       Object.values(attachmentUrls).forEach((url) => URL.revokeObjectURL(url))
     }
-  }, [event.attachments])
+  }, [event.attachments, cuenta?.accessToken])
   return (
     <div className="flex flex-col h-full app-bg dark:bg-stone-950">
       <Header
@@ -5815,6 +5916,15 @@ function DetailScreen({
                       </p>
                       <p className="text-[10px] text-stone-400">
                         {formatFileSize(a.size)}
+                      </p>
+                      <p
+                        className={`text-[10px] font-semibold ${
+                          a.remoto
+                            ? "text-emerald-600 dark:text-emerald-400"
+                            : "text-stone-400"
+                        }`}
+                      >
+                        {a.remoto ? "En la nube" : "Solo en este teléfono"}
                       </p>
                     </div>
                     <button
@@ -6450,6 +6560,9 @@ function CuentaCard({
   avisoSync,
   onSync,
   onVinculo,
+  onBorrarLocal,
+  tiempoReal,
+  ultimoTiempoReal,
 }: {
   cuenta: Sesion | null
   aviso: string
@@ -6459,6 +6572,9 @@ function CuentaCard({
   avisoSync: string
   onSync: () => void
   onVinculo: (vinculado: boolean) => void
+  onBorrarLocal: () => Promise<void>
+  tiempoReal: EstadoTiempoReal
+  ultimoTiempoReal: string
 }) {
   const [correo, setCorreo] = useState(cuenta?.usuario.email ?? "")
   const [enviando, setEnviando] = useState(false)
@@ -6473,9 +6589,24 @@ function CuentaCard({
   const [reclamando, setReclamando] = useState(false)
   const [desvinculando, setDesvinculando] = useState(false)
   const [saliendo, setSaliendo] = useState(false)
+  const [saliendoTodos, setSaliendoTodos] = useState(false)
   const [confirmarBaja, setConfirmarBaja] = useState(false)
+  const [confirmarTodos, setConfirmarTodos] = useState(false)
   const [dispositivos, setDispositivos] = useState<DispositivoCuenta[]>([])
   const [errorDispositivos, setErrorDispositivos] = useState("")
+  // Renombrar en línea: un solo teléfono a la vez. El nombre se guarda con la función de la base y
+  // la lista se actualiza sin volver a pedir todo.
+  const [editandoId, setEditandoId] = useState<string | null>(null)
+  const [nombreEditado, setNombreEditado] = useState("")
+  const [guardandoNombre, setGuardandoNombre] = useState(false)
+  // Cerrar la sesión de otro teléfono pide un segundo toque, como el desvincular de este.
+  const [confirmarRevocar, setConfirmarRevocar] = useState<string | null>(null)
+  const [revocando, setRevocando] = useState<string | null>(null)
+  // Después de cerrar sesión: conservar o borrar la copia local. Se pregunta una vez y se puede
+  // cerrar sin tocar nada. «Borrar» pide un segundo toque porque no tiene vuelta.
+  const [preguntarCopia, setPreguntarCopia] = useState(false)
+  const [confirmarBorrarLocal, setConfirmarBorrarLocal] = useState(false)
+  const [borrandoLocal, setBorrandoLocal] = useState(false)
 
   const cargarDispositivos = async (sesion: Sesion) => {
     setRevisando(true)
@@ -6504,11 +6635,17 @@ function CuentaCard({
     setCorreo(cuenta?.usuario.email ?? "")
     setVinculado(vinculadoEnEsteTelefono(cuenta))
     setConfirmarBaja(false)
+    setConfirmarTodos(false)
+    setEditandoId(null)
+    setConfirmarRevocar(null)
     setErrorDispositivos("")
     if (!cuenta) {
       setDispositivos([])
       return
     }
+    // Al volver a entrar, la pregunta de la copia local ya no corresponde.
+    setPreguntarCopia(false)
+    setConfirmarBorrarLocal(false)
     setMensaje(null)
     void cargarDispositivos(cuenta)
     // Solo cambia la identidad de la cuenta; renovar el token no debe volver a pedir la lista.
@@ -6591,6 +6728,94 @@ function CuentaCard({
     setDesvinculando(false)
   }
 
+  const renombrar = async (dispositivoId: string) => {
+    if (!cuenta || guardandoNombre) return
+    setGuardandoNombre(true)
+    const resultado = await renombrarDispositivo(
+      cuenta,
+      dispositivoId,
+      nombreEditado,
+    )
+    if (resultado.sesion) onSesion(resultado.sesion)
+    if (resultado.ok) {
+      setDispositivos((prev) =>
+        prev.map((d) =>
+          d.dispositivoId === dispositivoId
+            ? { ...d, nombre: nombreEditado.trim() }
+            : d,
+        ),
+      )
+      setEditandoId(null)
+      setMensaje({ ok: true, texto: "Nombre del teléfono actualizado." })
+    } else {
+      setMensaje({
+        ok: false,
+        texto: resultado.error || "No se pudo cambiar el nombre.",
+      })
+    }
+    setGuardandoNombre(false)
+  }
+
+  const cerrarEnDispositivo = async (dispositivoId: string) => {
+    if (!cuenta || revocando) return
+    if (confirmarRevocar !== dispositivoId) {
+      setConfirmarRevocar(dispositivoId)
+      return
+    }
+    setRevocando(dispositivoId)
+    setMensaje(null)
+    const resultado = await revocarDispositivo(cuenta, dispositivoId)
+    if (resultado.sesion) onSesion(resultado.sesion)
+    if (resultado.ok) {
+      setDispositivos((prev) =>
+        prev.filter((d) => d.dispositivoId !== dispositivoId),
+      )
+      setMensaje({
+        ok: true,
+        texto:
+          dispositivoId === dispositivo().id
+            ? "Este teléfono quedó desvinculado. La cuenta sigue abierta."
+            : "Ese teléfono dejó de estar vinculado y ya no sincronizará.",
+      })
+      if (dispositivoId === dispositivo().id) {
+        setVinculado(false)
+        onVinculo(false)
+      }
+    } else {
+      setMensaje({
+        ok: false,
+        texto: resultado.error || "No se pudo cerrar esa sesión.",
+      })
+    }
+    setConfirmarRevocar(null)
+    setRevocando(null)
+  }
+
+  const cerrarTodos = async () => {
+    if (!cuenta || saliendoTodos) return
+    if (!confirmarTodos) {
+      setConfirmarTodos(true)
+      return
+    }
+    setSaliendoTodos(true)
+    setMensaje(null)
+    const resultado = await revocarTodosDispositivos(cuenta)
+    if (resultado.sesion) onSesion(resultado.sesion)
+    // La sesión global se cierra después de desvincular: el token todavía tiene que servir para
+    // la última llamada. Aunque falle la red, este teléfono olvida su sesión igual.
+    await cerrarSesion(resultado.sesion ?? cuenta, { global: true })
+    onSesion(null)
+    setVinculado(false)
+    onVinculo(false)
+    setDispositivos([])
+    setSaliendoTodos(false)
+    setPreguntarCopia(true)
+    setMensaje({
+      ok: true,
+      texto: "Sesión cerrada en todos los teléfonos de la cuenta.",
+    })
+  }
+
   const salir = async () => {
     if (!cuenta || saliendo) return
     setSaliendo(true)
@@ -6600,9 +6825,27 @@ function CuentaCard({
     onVinculo(false)
     setDispositivos([])
     setSaliendo(false)
+    setPreguntarCopia(true)
     setMensaje({
       ok: true,
       texto: "Sesión cerrada. Tus datos siguen en este teléfono.",
+    })
+  }
+
+  const borrarCopia = async () => {
+    if (borrandoLocal) return
+    if (!confirmarBorrarLocal) {
+      setConfirmarBorrarLocal(true)
+      return
+    }
+    setBorrandoLocal(true)
+    await onBorrarLocal()
+    setBorrandoLocal(false)
+    setPreguntarCopia(false)
+    setConfirmarBorrarLocal(false)
+    setMensaje({
+      ok: true,
+      texto: "La copia local se borró. La app queda como nueva en este teléfono.",
     })
   }
 
@@ -6636,6 +6879,14 @@ function CuentaCard({
             </div>
             {!vinculado ? (
               <>
+                {!!avisoSync && (
+                  <p
+                    role="status"
+                    className="text-[12px] text-amber-700 dark:text-amber-300 mt-3"
+                  >
+                    {avisoSync}
+                  </p>
+                )}
                 <p className="text-[12px] text-stone-500 dark:text-stone-400 mt-3">
                   Vinculá este teléfono a tu cuenta para que la cuenta sepa
                   cuáles son tuyos. El alta comprueba la sesión y el token de
@@ -6691,7 +6942,23 @@ function CuentaCard({
                           : "Todavía no hubo una pasada. Se hace sola al guardar."}
                   </p>
                   <p className="text-[10px] text-stone-400 mt-1">
-                    Los adjuntos no viajan: quedan en el teléfono que los agregó.
+                    Los adjuntos también se copian a la nube. Si no hay red,
+                    quedan en este teléfono y se suben después.
+                  </p>
+                  <p
+                    role="status"
+                    className={`text-[10px] mt-1 ${
+                      tiempoReal === "conectado"
+                        ? "text-emerald-600 dark:text-emerald-400"
+                        : tiempoReal === "sin-red" || tiempoReal === "sin-permiso"
+                          ? "text-amber-700 dark:text-amber-300"
+                          : "text-stone-400"
+                    }`}
+                  >
+                    {explicarEstadoTiempoReal(tiempoReal)}
+                    {ultimoTiempoReal
+                      ? ` · último aviso: ${ultimoTiempoReal}`
+                      : ""}
                   </p>
                   <button
                     type="button"
@@ -6731,28 +6998,103 @@ function CuentaCard({
                 Todavía no hay teléfonos vinculados.
               </p>
             ) : (
-              dispositivos.map((d) => (
-                <div
-                  key={d.dispositivoId}
-                  className="flex items-center justify-between gap-3 py-2 border-b border-stone-50 dark:border-stone-800 last:border-0"
-                >
-                  <div className="min-w-0">
-                    <p className="text-[12px] font-semibold text-stone-700 dark:text-stone-200 truncate">
-                      {d.nombre}
-                      {d.dispositivoId === dispositivo().id && (
-                        <span className="text-amber-600 dark:text-amber-300 text-[10px] font-bold ml-2">
-                          este teléfono
-                        </span>
-                      )}
-                    </p>
-                    <p className="text-[10px] text-stone-400">
-                      {d.ultimaConexion
-                        ? `Última conexión: ${fechaYHora(d.ultimaConexion)}`
-                        : "Vinculado"}
-                    </p>
+              dispositivos.map((d) => {
+                const propio = d.dispositivoId === dispositivo().id
+                const editando = editandoId === d.dispositivoId
+                return (
+                  <div
+                    key={d.dispositivoId}
+                    className="py-2 border-b border-stone-50 dark:border-stone-800 last:border-0"
+                  >
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="min-w-0 flex-1">
+                        {editando ? (
+                          <input
+                            value={nombreEditado}
+                            maxLength={40}
+                            aria-label="Nombre del teléfono"
+                            onChange={(e) => setNombreEditado(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") void renombrar(d.dispositivoId)
+                            }}
+                            className="w-full bg-stone-50 dark:bg-stone-800 rounded-lg px-2 py-1 text-[12px] font-semibold border border-stone-200 dark:border-stone-700 outline-none focus:border-amber-400"
+                          />
+                        ) : (
+                          <p className="text-[12px] font-semibold text-stone-700 dark:text-stone-200 truncate">
+                            {d.nombre}
+                            {propio && (
+                              <span className="text-amber-600 dark:text-amber-300 text-[10px] font-bold ml-2">
+                                este teléfono
+                              </span>
+                            )}
+                          </p>
+                        )}
+                        <p className="text-[10px] text-stone-400">
+                          {d.ultimaConexion
+                            ? `Última conexión: ${fechaYHora(d.ultimaConexion)}`
+                            : "Vinculado"}
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-2 flex-shrink-0">
+                        {editando ? (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => void renombrar(d.dispositivoId)}
+                              disabled={guardandoNombre}
+                              aria-label="Guardar el nombre del teléfono"
+                              className="text-[11px] font-bold text-amber-600 dark:text-amber-300 disabled:opacity-50"
+                            >
+                              {guardandoNombre ? "Guardando…" : "Guardar"}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setEditandoId(null)}
+                              aria-label="Cancelar el nombre del teléfono"
+                              className="text-[11px] font-semibold text-stone-400"
+                            >
+                              Cancelar
+                            </button>
+                          </>
+                        ) : (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditandoId(d.dispositivoId)
+                                setNombreEditado(d.nombre)
+                              }}
+                              aria-label={`Renombrar ${d.nombre}`}
+                              className="text-[11px] font-semibold text-stone-500 dark:text-stone-400 underline decoration-stone-300 underline-offset-2"
+                            >
+                              Renombrar
+                            </button>
+                            {!propio && (
+                              <button
+                                type="button"
+                                onClick={() => void cerrarEnDispositivo(d.dispositivoId)}
+                                disabled={revocando === d.dispositivoId}
+                                aria-label={`Cerrar la sesión de ${d.nombre}`}
+                                className={`text-[11px] font-semibold underline decoration-red-200 underline-offset-2 disabled:opacity-50 ${
+                                  confirmarRevocar === d.dispositivoId
+                                    ? "text-red-600 dark:text-red-400"
+                                    : "text-stone-500 dark:text-stone-400"
+                                }`}
+                              >
+                                {revocando === d.dispositivoId
+                                  ? "Cerrando…"
+                                  : confirmarRevocar === d.dispositivoId
+                                    ? "¿Seguro?"
+                                    : "Cerrar sesión"}
+                              </button>
+                            )}
+                          </>
+                        )}
+                      </div>
+                    </div>
                   </div>
-                </div>
-              ))
+                )
+              })
             )}
             {errorDispositivos && (
               <p className="text-[11px] text-stone-400 mt-2">
@@ -6761,16 +7103,31 @@ function CuentaCard({
             )}
             <button
               type="button"
+              onClick={cerrarTodos}
+              disabled={saliendoTodos}
+              className={`mt-4 w-full py-2.5 rounded-2xl text-[13px] font-semibold disabled:opacity-50 ${
+                confirmarTodos
+                  ? "bg-red-600 text-white"
+                  : "bg-stone-100 dark:bg-stone-800 text-stone-600 dark:text-stone-300"
+              }`}
+            >
+              {saliendoTodos
+                ? "Cerrando en todos…"
+                : confirmarTodos
+                  ? "¿Seguro? Cerrar en todos los teléfonos"
+                  : "Cerrar sesión en todos los teléfonos"}
+            </button>
+            <button
+              type="button"
               onClick={salir}
               disabled={saliendo}
-              className="mt-4 w-full py-3 rounded-2xl bg-stone-100 dark:bg-stone-800 text-stone-600 dark:text-stone-300 text-[14px] font-semibold disabled:opacity-50"
+              className="mt-2 w-full py-3 rounded-2xl bg-stone-100 dark:bg-stone-800 text-stone-600 dark:text-stone-300 text-[14px] font-semibold disabled:opacity-50"
             >
-              {saliendo ? "Saliendo…" : "Cerrar sesión"}
+              {saliendo ? "Saliendo…" : "Cerrar sesión en este teléfono"}
             </button>
             <p className="text-[11px] text-stone-400 mt-3">
-              Al cerrar sesión, tus recordatorios siguen en este teléfono. La
-              sincronización entre dispositivos llega en la próxima fase de la
-              Etapa 15.
+              Al cerrar sesión, tus recordatorios siguen en este teléfono. Ahí
+              puedes decidir si conservas esa copia local o la borras.
             </p>
           </>
         ) : (
@@ -6825,6 +7182,45 @@ function CuentaCard({
             {aviso}
           </p>
         )}
+        {preguntarCopia && (
+          <div className="mt-3 rounded-2xl border border-amber-200 dark:border-amber-500/40 bg-amber-50/70 dark:bg-amber-500/10 p-3">
+            <p className="text-[12px] font-bold text-stone-800 dark:text-stone-100">
+              ¿Qué hacemos con la copia local?
+            </p>
+            <p className="text-[11px] text-stone-500 dark:text-stone-400 mt-1">
+              Tus recordatorios, usuarios y adjuntos siguen en este teléfono. Si
+              borras la copia, la app queda como nueva y no se puede deshacer.
+            </p>
+            <div className="flex flex-col gap-2 mt-3">
+              <button
+                type="button"
+                onClick={() => {
+                  setPreguntarCopia(false)
+                  setConfirmarBorrarLocal(false)
+                }}
+                className="w-full py-2.5 rounded-xl bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-700 text-[12px] font-bold text-stone-700 dark:text-stone-200"
+              >
+                Conservar mis datos
+              </button>
+              <button
+                type="button"
+                onClick={borrarCopia}
+                disabled={borrandoLocal}
+                className={`w-full py-2.5 rounded-xl text-[12px] font-bold disabled:opacity-50 ${
+                  confirmarBorrarLocal
+                    ? "bg-red-600 text-white"
+                    : "bg-white dark:bg-stone-900 border border-red-200 dark:border-red-500/40 text-red-600 dark:text-red-400"
+                }`}
+              >
+                {borrandoLocal
+                  ? "Borrando…"
+                  : confirmarBorrarLocal
+                    ? "¿Seguro? Borrar la copia local"
+                    : "Borrar la copia local"}
+              </button>
+            </div>
+          </div>
+        )}
         {mensaje && (
           <p
             role="status"
@@ -6871,6 +7267,9 @@ function SettingsScreen({
   avisoSync,
   onSync,
   onVinculo,
+  onBorrarLocal,
+  tiempoReal,
+  ultimoTiempoReal,
 }: {
   events: Reminder[]
   dark: boolean
@@ -6900,6 +7299,9 @@ function SettingsScreen({
   avisoSync: string
   onSync: () => void
   onVinculo: (vinculado: boolean) => void
+  onBorrarLocal: () => Promise<void>
+  tiempoReal: EstadoTiempoReal
+  ultimoTiempoReal: string
 }) {
   // Copia de seguridad: el archivo se elige acá mismo y antes de tocar nada se muestra qué trae y las
   // dos maneras de traerlo (combinar o reemplazar). El mensaje del final es del último intento
@@ -6918,6 +7320,8 @@ function SettingsScreen({
   const [sinEspacio, setSinEspacio] = useState(false)
   const [limpiando, setLimpiando] = useState(false)
   const [avisoEspacio, setAvisoEspacio] = useState<string | null>(null)
+  const [limpiandoNube, setLimpiandoNube] = useState(false)
+  const [avisoNube, setAvisoNube] = useState<string | null>(null)
   const medirEspacio = async () => {
     try {
       const referencias = new Set(
@@ -6946,6 +7350,29 @@ function SettingsScreen({
     )
     setLimpiando(false)
   }
+  // Huérfanos en Storage: se comparan las rutas de la nube con las que usan los recordatorios de
+  // este usuario. Si no hay sesión, el botón no aparece; si la lista falla, no se borra nada.
+  const limpiarNube = async () => {
+    if (!cuenta || limpiandoNube) return
+    setLimpiandoNube(true)
+    setAvisoNube(null)
+    const referencias = new Set(
+      events
+        .flatMap((e) => e.attachments ?? [])
+        .map((a) => a.remoto)
+        .filter((ruta): ruta is string => !!ruta),
+    )
+    const resultado = await limpiarAdjuntosRemotos(cuenta, referencias)
+    setAvisoNube(
+      resultado.ok
+        ? resultado.borrados
+          ? `Se borraron ${cuantos(resultado.borrados, "copia", "copias")} sin usar en la nube.`
+          : "No había copias sin usar en la nube."
+        : resultado.error || "No se pudo revisar la nube.",
+    )
+    setLimpiandoNube(false)
+  }
+  const pendientesNube = cuenta ? colaAdjuntos().length : 0
   const descargar = async () => {
     setOcupado(true)
     setPendiente(null)
@@ -7028,6 +7455,20 @@ function SettingsScreen({
   // que Crear también avisa que ese recordatorio saldrá por notificación.
   const hasContact = !!(contact.phone.trim() || contact.email.trim())
   const contactAccepted = contact.accepted !== false
+  // Mientras se edita, los campos se habilitan pero la confirmación sigue siendo la de antes hasta
+  // que se toque «Confirmar datos» o se cambie algún dato (ahí vuelve a quedar pendiente).
+  const [editandoContacto, setEditandoContacto] = useState(false)
+  useEffect(() => {
+    setEditandoContacto(false)
+  }, [activeProfile.id])
+  const confirmarContacto = () => {
+    if (contactAccepted && !editandoContacto) {
+      setEditandoContacto(true)
+      return
+    }
+    setContact({ accepted: true })
+    setEditandoContacto(false)
+  }
   const [permission, setPermission] = useState(
     "Notification" in window ? Notification.permission : "default",
   )
@@ -7662,6 +8103,9 @@ function SettingsScreen({
           avisoSync={avisoSync}
           onSync={onSync}
           onVinculo={onVinculo}
+          onBorrarLocal={onBorrarLocal}
+          tiempoReal={tiempoReal}
+          ultimoTiempoReal={ultimoTiempoReal}
         />
         <p className="text-[11px] font-bold uppercase tracking-widest text-stone-400 mb-2">
           Usuarios de este dispositivo
@@ -7796,14 +8240,15 @@ function SettingsScreen({
           Contacto de {activeProfile.name}
         </p>
         <div className="bg-white dark:bg-stone-900 rounded-3xl border border-stone-100 dark:border-stone-800 p-5 mb-4">
-          {/* Los estados («✓ Conectado» / «Por confirmar») van en la línea del título de cada dato
-              —WhatsApp y correo, alineados igual—: así la fila del campo queda para el dato y el número
-              entra completo con su cuadro chico de extensión. */}
+          {/* El ícono va chiquito a la izquierda del título y el estado a la derecha: así la fila del
+              campo queda entera para la bandera, el prefijo y el número. Los dos datos se alinean
+              igual para que la tarjeta se lea de un vistazo. */}
           <div className="flex items-center justify-between gap-2 mb-2">
             <label
               htmlFor="profile-phone"
-              className="text-[11px] font-bold uppercase tracking-widest text-stone-400"
+              className="flex items-center gap-2 text-[11px] font-bold uppercase tracking-widest text-stone-400"
             >
+              <WhatsAppG className="w-4 h-4 flex-shrink-0" />
               Número de WhatsApp
             </label>
             {!!contact.phone.trim() && (
@@ -7818,21 +8263,20 @@ function SettingsScreen({
               </span>
             )}
           </div>
-          <div className="flex items-center gap-2">
-            <span className="w-11 h-11 rounded-2xl bg-amber-50 dark:bg-amber-500/20 border border-amber-200 dark:border-amber-500/40 flex items-center justify-center flex-shrink-0">
-              <WhatsAppG className="w-6 h-6" />
-            </span>
-            <PhoneField
-              id="profile-phone"
-              value={contact.phone}
-              onChange={(v) => setContact({ phone: v, accepted: false })}
-            />
-          </div>
+          <PhoneField
+            id="profile-phone"
+            value={contact.phone}
+            disabled={contactAccepted && !editandoContacto}
+            onChange={(v) => setContact({ phone: v, accepted: false })}
+          />
           <div className="flex items-center justify-between gap-2 mt-4 mb-2">
             <label
               htmlFor="profile-email"
-              className="text-[11px] font-bold uppercase tracking-widest text-stone-400"
+              className="flex items-center gap-2 text-[11px] font-bold uppercase tracking-widest text-stone-400"
             >
+              <span aria-hidden="true" className="text-[14px] leading-none">
+                ✉️
+              </span>
               Correo electrónico
             </label>
             {!!contact.email.trim() && (
@@ -7847,46 +8291,45 @@ function SettingsScreen({
               </span>
             )}
           </div>
-          <div className="flex items-center gap-3">
-            <span className="w-11 h-11 rounded-2xl bg-amber-50 dark:bg-amber-500/20 border border-amber-200 dark:border-amber-500/40 flex items-center justify-center text-[20px] flex-shrink-0">
-              ✉️
-            </span>
-            <input
-              id="profile-email"
-              type="email"
-              inputMode="email"
-              autoComplete="email"
-              maxLength={60}
-              value={contact.email}
-              onChange={(e) =>
-                setContact({ email: e.target.value, accepted: false })
-              }
-              placeholder="tucorreo@ejemplo.com"
-              className="flex-1 min-w-0 px-4 py-3.5 rounded-2xl bg-stone-50 dark:bg-stone-800 border border-stone-100 dark:border-stone-800 text-[15px] font-semibold text-stone-800 dark:text-stone-100 placeholder:text-stone-300 dark:placeholder:text-stone-600 outline-none focus:border-amber-400"
-            />
-          </div>
+          <input
+            id="profile-email"
+            type="email"
+            inputMode="email"
+            autoComplete="email"
+            maxLength={60}
+            value={contact.email}
+            disabled={contactAccepted && !editandoContacto}
+            onChange={(e) =>
+              setContact({ email: e.target.value, accepted: false })
+            }
+            placeholder="tucorreo@ejemplo.com"
+            className="w-full min-w-0 px-4 py-3.5 rounded-2xl bg-stone-50 dark:bg-stone-800 border border-stone-100 dark:border-stone-800 text-[15px] font-semibold text-stone-800 dark:text-stone-100 placeholder:text-stone-300 dark:placeholder:text-stone-600 outline-none focus:border-amber-400 disabled:bg-stone-100 dark:disabled:bg-stone-800 disabled:text-stone-400 disabled:border-stone-100 dark:disabled:border-stone-800"
+          />
           {hasContact && (
             <>
-              <label
-                htmlFor="profile-contact-accept"
-                className="mt-4 flex items-start gap-3 cursor-pointer select-none"
+              <button
+                id="profile-contact-confirm"
+                type="button"
+                onClick={confirmarContacto}
+                className={`mt-4 w-full py-3.5 rounded-2xl text-[15px] font-bold ${
+                  contactAccepted && !editandoContacto
+                    ? "bg-stone-100 dark:bg-stone-800 text-stone-700 dark:text-stone-200"
+                    : "bg-amber-600 text-white"
+                }`}
               >
-                <input
-                  id="profile-contact-accept"
-                  type="checkbox"
-                  checked={contactAccepted}
-                  onChange={(e) => setContact({ accepted: e.target.checked })}
-                  className="mt-0.5 w-4 h-4 flex-shrink-0 accent-amber-600"
-                />
-                <span className="text-[12px] text-stone-600 dark:text-stone-300 leading-snug">
-                  Acepto que AVISPATE use estos datos para avisarme por WhatsApp
-                  y por correo. Son míos y puedo cambiarlos cuando quiera.
-                </span>
-              </label>
+                {contactAccepted && !editandoContacto
+                  ? "Editar datos"
+                  : "Confirmar datos"}
+              </button>
+              <p className="text-[11px] text-stone-400 mt-3 leading-relaxed">
+                Al confirmar, aceptas que AVISPATE use estos datos para avisarte
+                por WhatsApp y por correo. Son tuyos y puedes cambiarlos cuando
+                quieras.
+              </p>
               {!contactAccepted && (
                 <p className="text-[11px] font-semibold text-amber-700 dark:text-amber-300 mt-2">
-                  Sin el ticket marcado, los avisos por WhatsApp y correo quedan
-                  en pausa.
+                  Sin confirmar, los avisos por WhatsApp y correo quedan en
+                  pausa.
                 </p>
               )}
             </>
@@ -7894,8 +8337,8 @@ function SettingsScreen({
           <p className="text-[11px] text-stone-400 mt-3">
             Son los datos de {activeProfile.name}: cada usuario del dispositivo
             tiene los suyos. Ahí llegan los avisos por WhatsApp y por correo, con
-            la app cerrada. Apagar el canal o destildar el ticket da de baja el
-            envío.
+            la app cerrada. Apagar el canal, editar sin confirmar o desvincular
+            el dato da de baja el envío.
           </p>
         </div>
         <p className="text-[11px] font-bold uppercase tracking-widest text-stone-400 mb-2">
@@ -8527,6 +8970,34 @@ function SettingsScreen({
                 {avisoEspacio}
               </p>
             )}
+            {cuenta && (
+              <div className="mt-3 pt-3 border-t border-stone-100 dark:border-stone-800">
+                <p className="text-[11px] font-bold uppercase tracking-widest text-stone-400">
+                  Adjuntos en la nube
+                </p>
+                <p className="text-[11px] text-stone-400 mt-1">
+                  {pendientesNube
+                    ? `${cuantos(pendientesNube, "archivo espera", "archivos esperan")} a que vuelva la conexión.`
+                    : "Los archivos nuevos se suben solos; si no hay red, quedan en este teléfono."}
+                </p>
+                <button
+                  type="button"
+                  onClick={limpiarNube}
+                  disabled={limpiandoNube}
+                  className="mt-2 px-3 py-2 rounded-xl bg-stone-100 dark:bg-stone-800 text-stone-700 dark:text-stone-200 text-[12px] font-bold disabled:opacity-50"
+                >
+                  {limpiandoNube ? "Revisando…" : "Revisar copias sin usar"}
+                </button>
+                {avisoNube && (
+                  <p
+                    role="status"
+                    className="mt-2 text-[12px] text-emerald-600 dark:text-emerald-400"
+                  >
+                    {avisoNube}
+                  </p>
+                )}
+              </div>
+            )}
           </div>
           {/* Etapa 9 y 12: la copia de seguridad. Descargar (o compartir) deja un .json con todo;
               restaurar lo devuelve después de mostrar qué trae y de elegir si se suma a lo que hay o
@@ -9015,6 +9486,11 @@ export default function App() {
   )
   const [sincronizando, setSincronizando] = useState(false)
   const [avisoSync, setAvisoSync] = useState("")
+  // Etapa 15, fase 6: estado del canal de tiempo real y la última tabla que avisó. La tarjeta lo
+  // muestra; si el canal se cae, la sincronización por sondeo sigue viva.
+  const [tiempoReal, setTiempoReal] = useState<EstadoTiempoReal>("apagado")
+  const [ultimoTiempoReal, setUltimoTiempoReal] = useState("")
+  const realtimeTimer = useRef<number | null>(null)
   const sincronizandoRef = useRef(false)
   // La foto que se sube se lee de este ref, no de las dependencias del callback: así un cambio en los
   // datos no reconstruye la función ni reinicia el temporizador de 45 segundos.
@@ -9058,6 +9534,15 @@ export default function App() {
               : previa,
           )
         }
+        if (resultado.revocado) {
+          // Otro teléfono cerró la sesión de este desde la lista de dispositivos. La cuenta sigue
+          // abierta, pero el motor se apaga hasta que se vuelva a vincular.
+          olvidarVinculoTelefono()
+          setVinculado(false)
+          setAvisoSync(
+            "Este teléfono fue desconectado desde otro dispositivo. Vinculalo de nuevo para seguir sincronizando.",
+          )
+        }
         if (resultado.ok && resultado.cambios.length) {
           setEvents((prev) =>
             aplicarCambiosLista(
@@ -9094,7 +9579,13 @@ export default function App() {
             return siguiente.length ? siguiente : prev
           })
         }
-        setAvisoSync(resultado.ok ? "" : resultado.error || "")
+        setAvisoSync(
+          resultado.revocado
+            ? "Este teléfono fue desconectado desde otro dispositivo. Vinculalo de nuevo para seguir sincronizando."
+            : resultado.ok
+              ? ""
+              : resultado.error || "",
+        )
         setVistaSync(
           resumenSincronizacion(
             (resultado.sesion ?? cuenta).usuario.id,
@@ -9105,7 +9596,9 @@ export default function App() {
         setSincronizando(false)
       }
     },
-    [cuenta],
+    // La identidad y los tokens, no el objeto: una renovación o una nueva lectura de la misma sesión
+    // no debe reiniciar los temporizadores ni abrir otro socket.
+    [cuenta?.usuario.id, cuenta?.accessToken, cuenta?.refreshToken],
   )
 
   // Un respiro de 1,2 s: guardar un recordatorio hace varios setState y no queremos un POST por
@@ -9128,6 +9621,92 @@ export default function App() {
       window.removeEventListener("online", alVolver)
     }
   }, [vinculado, cuenta, sincronizar])
+
+  // Una sola conexión de tiempo real por cuenta vinculada. El aviso del socket se junta con un
+  // respiro corto: un cambio de una fila puede llegar junto a otros y no queremos una pasada por
+  // cada mensaje. El sondeo de 45 s sigue activo por si el canal no está disponible.
+  useEffect(() => {
+    if (!vinculado || !cuenta) {
+      setTiempoReal("apagado")
+      return
+    }
+    const control = conectarTiempoReal({
+      sesion: cuenta,
+      onEstado: setTiempoReal,
+      onCambio: (cambio) => {
+        setUltimoTiempoReal(cambio.tabla)
+        if (realtimeTimer.current) window.clearTimeout(realtimeTimer.current)
+        realtimeTimer.current = window.setTimeout(
+          () => void sincronizar(false),
+          400,
+        )
+      },
+    })
+    return () => {
+      if (realtimeTimer.current) window.clearTimeout(realtimeTimer.current)
+      realtimeTimer.current = null
+      control.detener()
+    }
+  }, [
+    vinculado,
+    cuenta?.usuario.id,
+    cuenta?.accessToken,
+    sincronizar,
+  ])
+
+  // Etapa 15, fase 5: los adjuntos que ya estaban en el teléfono antes de vincular la cuenta se
+  // suben solos. `intentados` evita martillar la nube con el mismo archivo cuando falla; al volver
+  // la conexión se limpia y se reintenta.
+  const adjuntosIntentados = useRef(new Set<string>())
+  const [adjuntosTick, setAdjuntosTick] = useState(0)
+  useEffect(() => {
+    if (!cuenta || !vinculado) return
+    const faltan = events
+      .flatMap((e) => e.attachments ?? [])
+      .filter((a) => !a.remoto && !adjuntosIntentados.current.has(a.id))
+    if (!faltan.length) return
+    let vivo = true
+    for (const meta of faltan) adjuntosIntentados.current.add(meta.id)
+    void (async () => {
+      const remotos = new Map<string, string>()
+      for (const meta of faltan) {
+        const blob = await getAttachment(meta.id)
+        if (!blob) continue
+        const subida = await subirAdjunto(cuenta, meta.id, blob, meta.name)
+        if (subida.ok && subida.ruta) remotos.set(meta.id, subida.ruta)
+      }
+      if (!vivo || !remotos.size) return
+      const sello = new Date().toISOString()
+      setEvents((prev) =>
+        prev.map((e) => ({
+          ...e,
+          attachments: (e.attachments ?? []).map((meta) => {
+            const ruta = remotos.get(meta.id)
+            return ruta
+              ? { ...meta, remoto: ruta, remotoEn: sello }
+              : meta
+          }),
+        })),
+      )
+    })()
+    return () => {
+      vivo = false
+    }
+  }, [cuenta, vinculado, events, adjuntosTick])
+  useEffect(() => {
+    // Cada 45 s —y al volver la conexión— se reintentan los adjuntos que habían fallado. El tick
+    // vuelve a disparar el efecto de subida sin esperar a que cambie un recordatorio.
+    const alVolver = () => {
+      adjuntosIntentados.current.clear()
+      setAdjuntosTick((v) => v + 1)
+    }
+    window.addEventListener("online", alVolver)
+    const intervalo = window.setInterval(alVolver, 45_000)
+    return () => {
+      window.removeEventListener("online", alVolver)
+      window.clearInterval(intervalo)
+    }
+  }, [])
 
 
   // Relevo al cerrar el onboarding: mientras la abeja se despide y el velo se desvanece, el
@@ -9238,9 +9817,28 @@ export default function App() {
     const vivos = new Set(
       eventsRef.current.flatMap((e) => (e.attachments ?? []).map((a) => a.id)),
     )
+    // Se guarda la metadata de cada archivo que se va a soltar para poder borrar también su copia
+    // en la nube. Solo se borra lo que ya no usa ningún recordatorio vivo.
+    const metas = new Map<string, AttachmentMeta>()
+    const sumarEventos = (piezas: Pieza<Reminder>[]) => {
+      for (const { item } of piezas)
+        for (const meta of item.attachments ?? []) metas.set(meta.id, meta)
+    }
+    if (d.tipo === "recordatorio") {
+      for (const meta of d.event.attachments ?? []) metas.set(meta.id, meta)
+    } else if (d.tipo === "adjunto") {
+      metas.set(d.meta.id, d.meta)
+    } else {
+      sumarEventos(d.eventos)
+    }
     archivosDe(d)
       .filter((id) => !vivos.has(id))
-      .forEach((id) => void deleteAttachment(id))
+      .forEach((id) => {
+        void deleteAttachment(id)
+        desencolarAdjunto(id)
+        const meta = metas.get(id)
+        if (meta?.remoto) void borrarAdjuntoRemoto(cuenta, meta.remoto)
+      })
   }
   const cerrarBorrado = () => {
     if (borradoTimer.current) {
@@ -9463,11 +10061,37 @@ export default function App() {
     await Promise.all(
       files.map((file, i) => saveAttachment(metas[start + i].id, file)),
     )
-    const alreadyAdded = events.some((e) => e.id === r.id && e.gcalAddedAt)
+    // La copia local ya está guardada. Si hay sesión, se sube también a Storage; si falla, el
+    // archivo sigue en el teléfono y la cola lo reintenta en la próxima pasada.
+    let guardado = r
+    if (files.length && cuenta) {
+      const remotos = new Map<string, string>()
+      await Promise.all(
+        files.map(async (file, i) => {
+          const meta = metas[start + i]
+          if (!meta) return
+          const subida = await subirAdjunto(cuenta, meta.id, file, meta.name)
+          if (subida.ok && subida.ruta) remotos.set(meta.id, subida.ruta)
+        }),
+      )
+      if (remotos.size)
+        guardado = {
+          ...r,
+          attachments: metas.map((meta) => {
+            const ruta = remotos.get(meta.id)
+            return ruta
+              ? { ...meta, remoto: ruta, remotoEn: new Date().toISOString() }
+              : meta
+          }),
+        }
+    }
+    const alreadyAdded = events.some(
+      (e) => e.id === guardado.id && e.gcalAddedAt,
+    )
     setEvents((prev) =>
-      prev.some((e) => e.id === r.id)
-        ? prev.map((e) => (e.id === r.id ? r : e))
-        : [r, ...prev],
+      prev.some((e) => e.id === guardado.id)
+        ? prev.map((e) => (e.id === guardado.id ? guardado : e))
+        : [guardado, ...prev],
     )
     // Si el formulario lo mandó a Google Calendar, queda la constancia en el historial.
     if (r.gcalAddedAt && !alreadyAdded)
@@ -9589,6 +10213,43 @@ export default function App() {
       },
       ...n,
     ])
+  }
+  // «Borrar la copia local» después de cerrar sesión: se va todo lo de la persona —recordatorios,
+  // usuarios, categorías, avisos, cola, copias y adjuntos—, pero el teléfono conserva su identidad
+  // (`avispate.dispositivo.v1`) para poder volver a vincularse sin crear otra. La app queda en el
+  // estado de un dispositivo nuevo, con el onboarding ya visto.
+  const borrarCopiaLocal = async () => {
+    if (borradoTimer.current) {
+      window.clearTimeout(borradoTimer.current)
+      borradoTimer.current = null
+    }
+    borradoRef.current = null
+    await borrarTodosLosAdjuntos()
+    try {
+      const quitar: string[] = []
+      for (let i = 0; i < localStorage.length; i += 1) {
+        const clave = localStorage.key(i)
+        if (!clave) continue
+        if (clave === "avispate.dispositivo.v1") continue
+        if (clave.startsWith("avispate.") || clave.startsWith("recuerda."))
+          quitar.push(clave)
+      }
+      for (const clave of quitar) localStorage.removeItem(clave)
+      localStorage.setItem(STORAGE_ONBOARDING, "1")
+    } catch {}
+    setEvents([])
+    setNotifications([])
+    setProfiles([DEFAULT_PROFILE])
+    setCategories(DEFAULT_CATEGORIES)
+    setActiveProfileId(DEFAULT_PROFILE_ID)
+    setSelectedId(null)
+    setEditingId(null)
+    setUltimaCopia(null)
+    setDeshacer(null)
+    setBorrado(null)
+    setVistaSync(resumenSincronizacion(null))
+    setScreen("settings")
+    setTab("settings")
   }
   const reset = () => {
     setEvents(SAMPLE_EVENTS)
@@ -10150,6 +10811,7 @@ export default function App() {
               onRemoveAttachment={removeAttachment}
               onCalendar={markCalendar}
               clock12={clock12}
+              cuenta={cuenta}
             />
           )}
           {screen === "calendar" && (
@@ -10212,6 +10874,9 @@ export default function App() {
               avisoSync={avisoSync}
               onSync={() => void sincronizar(true)}
               onVinculo={setVinculado}
+              onBorrarLocal={borrarCopiaLocal}
+              tiempoReal={tiempoReal}
+              ultimoTiempoReal={ultimoTiempoReal}
             />
           )}
           {screen === "tips" && (
