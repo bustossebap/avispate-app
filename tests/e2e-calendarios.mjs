@@ -472,6 +472,64 @@ const botonDe = (m, texto) =>
   )
 }
 
+// ------------------------------------------- U3) el eco del push no pisa la copia local
+{
+  const inicio = new Date(`${hoy}T12:00:00`)
+  const fin = new Date(inicio.getTime() + 60 * 60_000)
+  const eco = [
+    {
+      recordatorioId: "e-1",
+      titulo: "Cambio de aceite",
+      inicio: inicio.toISOString(),
+      fin: fin.toISOString(),
+      todoElDia: false,
+      notas: "Cambiar filtro\nRecordatorio de AVISPATE · Hogar",
+      eliminado: false,
+      actualizadoEn: "2027-01-01T12:00:00.000Z",
+    },
+  ]
+  const n = red([CALENDARIO], eco)
+  const m = montar(
+    bundle,
+    seed({
+      "avispate.events.v1": JSON.stringify([
+        evento("e-1", "Cambio de aceite", {
+          notes: "Cambiar filtro",
+          updatedAt: "2026-10-01T10:00:00.000Z",
+        }),
+      ]),
+    }),
+    { fetch: n.fetch },
+  )
+  await wait(180)
+  await m.irAjustes()
+  m.press(m.byLabel("Calendarios de Ana"))
+  await wait(80)
+  m.press(botonDe(m, "Sincronizar ahora"))
+  await wait(200)
+
+  const despues = m.events()
+  check(
+    "U3 · el evento que acaba de subir no se vuelve a aplicar como cambio de Google",
+    despues.length === 1 &&
+      despues[0].updatedAt === "2026-10-01T10:00:00.000Z" &&
+      despues[0].notes === "Cambiar filtro",
+    JSON.stringify(despues),
+  )
+  check(
+    "U3 · la tarjeta no cuenta ese eco como cambio traído",
+    (tarjetaGoogle(m)?.textContent || "").includes(
+      "1 recordatorio sincronizado.",
+    ) && !(tarjetaGoogle(m)?.textContent || "").includes("cambios traídos"),
+    (tarjetaGoogle(m)?.textContent || "").slice(-300),
+  )
+  check(
+    "U3 · sin errores de ejecución",
+    m.errors.length === 0,
+    m.errors.join(" | "),
+  )
+}
+
 // ------------------------------------------- P1) la conexión es de ESE perfil, no de toda la cuenta
 {
   const perfiles = [

@@ -575,11 +575,11 @@ Realtime y calendarios está en `supabase/README.md`. Las suites de la etapa son
 remota, desempate por dispositivo, tumbas, caída de red y un lote de 205 cambios),
 `tests/e2e-dispositivos.mjs` (27: renombre, cierre remoto/global y copia local),
 `tests/e2e-adjuntos.mjs` (14: Storage, URLs firmadas y huérfanos), `tests/e2e-tiempo-real.mjs` (14:
-join, aviso y reconexión) y `tests/e2e-calendarios.mjs` (48: OAuth simulado, RLS, PKCE, push
-completo/parcial, bajada de cambios, conexión por perfil, desconexión y callback). Las pruebas
-negativas `supabase/tests/0005_negativo.sql` y `0006_negativo.sql` se corren contra el proyecto y se
-revierten.
-La batería pasa de 930 a **1035**.
+join, aviso y reconexión) y `tests/e2e-calendarios.mjs` (51: OAuth simulado, RLS, PKCE, push
+completo/parcial, bajada de cambios, ecos del push, conexión por perfil, desconexión y callback). Las
+pruebas negativas `supabase/tests/0005_negativo.sql` y `0006_negativo.sql` se corren contra el
+proyecto y se revierten.
+La batería pasa de 930 a **1038**.
 
 La Etapa 16 ya conecta una cuenta real de Google con OAuth (PKCE + state), guarda los tokens
 cifrados en la Edge Function y tiene el **push verificado con una cuenta real**. La bajada ya está

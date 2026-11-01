@@ -142,8 +142,10 @@ lo dice sin ambigüedad: **«Modo de prueba»**. No hay llamadas a Google y no s
 - **Ecos del push:** los eventos que la app acaba de enviar en la misma pasada se reconocen por id,
   título, inicio, fin y notas, y no se vuelven a aplicar aunque Google devuelva un `updatedAt` nuevo.
   Así una sincronización no pisa la edición local que se acaba de subir.
-- **Recurrencia:** se envía `RRULE` igual que el `.ics`; las excepciones de una ocurrencia quedan
-  para una fase posterior, porque Google las modela como eventos separados.
+- **Recurrencia:** el `.ics` sigue exportando `RRULE`, pero `calendarios-sync` todavía empuja una sola
+  ocurrencia por recordatorio. Las repeticiones y sus excepciones quedan para una fase siguiente; la
+  bajada usa `singleEvents: true` y deduplica por `avispate_id` para no convertir una repetición en
+  varios recordatorios.
 
 ## 6. Revocación y seguridad
 
@@ -189,8 +191,9 @@ prometer en la web pura.
 
 - `tests/e2e-calendarios.mjs` monta la app con una sesión, un `fetch` de mentira y comprueba:
   conectar en modo simulado, el `Bearer`, el cuerpo del push, «Todos los avisos» filtrado, la bajada
-  de cambios (aplicar, borrar y conflicto a favor de lo local), desconectar, el aviso de vuelta del
-  callback y que sin sesión no se llama a la red. Son 48 comprobaciones.
+  de cambios (aplicar, borrar, conflicto a favor de lo local y eco del push que no se reaplica),
+  desconectar, el aviso de vuelta del callback y que sin sesión no se llama a la red. Son 51
+  comprobaciones.
 - La misma suite lee `0009` y las dos Edge Functions para verificar que las tablas tienen RLS, que
   los tokens no se conceden al navegador, que el flujo usa PKCE/state, que la bajada pagina con
   `nextPageToken` y guarda `nextSyncToken`, y que `service_role` no aparece en `src/`.
