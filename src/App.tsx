@@ -42,6 +42,18 @@ import {
 } from "./lib/sync"
 import { programarAvisos, type AvisoProgramado } from "./lib/cola"
 import {
+  calendariosDisponibles,
+  desconectarCalendario,
+  estadoCalendarios,
+  explicarErrorCalendario,
+  iniciarConexionCalendario,
+  leerAvisoCalendario,
+  procesarRetornoCalendario,
+  sincronizarCalendario,
+  type CalendarioCuenta,
+  type EventoCalendario,
+} from "./lib/calendarios"
+import {
   conectarTiempoReal,
   explicarEstadoTiempoReal,
   type EstadoTiempoReal,
@@ -1635,6 +1647,8 @@ interface GcalState {
   syncAll?: boolean
 }
 const DEFAULT_GCAL: GcalState = { connected: false }
+const AVISO_GCAL_SIN_CONFIRMAR =
+  "No se pudo confirmar la conexión de Google Calendar en este perfil. Probá de nuevo."
 function normalizeGcal(v: unknown): GcalState {
   const s = v as GcalState | null | undefined
   return {
@@ -1698,6 +1712,29 @@ function calendarPatch(
 ): Partial<Profile> {
   if (app === "google") return { gcal: state }
   return app === "apple" ? { apple: state } : { outlook: state }
+}
+// La foto que sube `calendarios-sync`: una hora de duración, el título y la categoría en las notas.
+// La fecha se convierte a ISO desde la hora local del teléfono y se manda la zona para que Google la
+// interprete igual que la app.
+function eventoParaCalendario(event: Reminder): EventoCalendario {
+  const inicio = parseDate(event.date, event.time)
+  const fin = new Date(inicio.getTime() + 60 * 60_000)
+  const zona =
+    typeof Intl !== "undefined"
+      ? Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC"
+      : "UTC"
+  return {
+    recordatorioId: event.id,
+    titulo: event.name,
+    inicio: inicio.toISOString(),
+    fin: fin.toISOString(),
+    todoElDia: false,
+    notas: [event.notes, `Recordatorio de AVISPATE · ${event.category}`]
+      .filter(Boolean)
+      .join("\n"),
+    actualizadoEn: event.gcalAddedAt || new Date().toISOString(),
+    zona,
+  }
 }
 
 // Contacto de un usuario: número de WhatsApp, correo y el "ticket" (accepted) con el que confirma que
@@ -7826,22 +7863,97 @@ function SettingsScreen({
       : permission === "denied"
         ? "Quedó bloqueado en este navegador: ábrelo desde el candado 🔒 de la barra de direcciones, elige «Permitir» y vuelve. Desde aquí ya no podemos preguntarte."
         : "El navegador solo lo concede cuando tú lo aceptas con un toque, así que no puede venir activado por defecto. Si eliges «Notificación» al guardar un recordatorio te lo pedimos en ese momento; también puedes activarlo aquí."
-  // Google Calendar de ESTE usuario: la conexión con la cuenta real llega junto con las cuentas de
-  // usuario. Por ahora mostramos los estados (sin conectar, conectando, conectado) y una
-  // sincronización simulada, pero cada usuario tiene su conexión y su propio "Todos los avisos".
+  // Google Calendar de ESTE usuario. Desde la Etapa 16 la conexión es real: la sesión de Supabase
+  // inicia OAuth y la Edge Function guarda los tokens. El perfil solo conserva la preferencia
+  // «Todos los avisos» y una copia del estado para las insignias de la lista de usuarios.
   const gcal = activeProfile.gcal ?? DEFAULT_GCAL
-  const [gcalBusy, setGcalBusy] = useState<"" | "connect" | "sync">("")
+  const [gcalBusy, setGcalBusy] = useState<
+    "" | "connect" | "sync" | "disconnect"
+  >("")
   const [gcalMsg, setGcalMsg] = useState("")
+  const [calendariosNube, setCalendariosNube] = useState<CalendarioCuenta[]>([])
+  const [calendariosCargados, setCalendariosCargados] = useState(false)
   const gcalEvents = events.filter(
     (e) =>
       e.gcalAddedAt && (e.ownerId || DEFAULT_PROFILE_ID) === activeProfile.id,
   )
   // Los recordatorios de ESTE usuario: son los que se descargan en un solo .ics cuando se sincroniza
-  // Apple Calendar o Outlook.
+  // Apple Calendar o Outlook, y los que sube Google cuando «Todos los avisos» está encendido.
   const myEvents = events.filter(
     (e) => (e.ownerId || DEFAULT_PROFILE_ID) === activeProfile.id,
   )
   const persistGcal = (next: GcalState) => onUpdateProfile({ gcal: next })
+  const googleCloud = calendariosNube.find(
+    (c) =>
+      c.proveedor === "google" &&
+      c.activo &&
+      c.perfil_id === activeProfile.id,
+  )
+  // Sin cuenta se conserva el estado local de las instalaciones anteriores (solo para mostrar);
+  // con cuenta, la verdad la dice la nube.
+  const googleConectado = !!googleCloud || (!cuenta && gcal.connected)
+  const googleModo = googleCloud?.modo === "simulado" ? "simulado" : "oauth"
+  const googleUltimaSync =
+    googleCloud?.ultima_sincronizacion || gcal.lastSync || ""
+  const gcalSincronizados =
+    googleUltimaSync && typeof gcal.lastCount === "number"
+      ? gcal.lastCount
+      : gcalEvents.length
+  const gcalAvisoError =
+    /^(No se pudo|Entrá|Conectá|Falta|Sin conexión)/.test(gcalMsg)
+  // Al cambiar de perfil o de cuenta, el aviso y la lista anterior dejan de valer. La lectura nueva
+  // empieza en «Buscando la conexión…» para no mostrar por un instante la conexión de otro perfil.
+  const gcalContexto = `${cuenta?.usuario.id || ""}:${activeProfile.id}`
+  const gcalContextoAnterior = useRef(gcalContexto)
+  useEffect(() => {
+    if (gcalContextoAnterior.current === gcalContexto) return
+    gcalContextoAnterior.current = gcalContexto
+    setGcalMsg("")
+    setCalendariosNube([])
+    setCalendariosCargados(false)
+  }, [gcalContexto])
+  // Al abrir Ajustes se lee el estado de la nube y se consume el aviso que dejó el callback. No se
+  // bloquea la pantalla: si falla, la tarjeta sigue mostrando el estado local.
+  useEffect(() => {
+    let vivo = true
+    const aviso = leerAvisoCalendario()
+    if (aviso) setGcalMsg(aviso.texto)
+    if (!cuenta || !calendariosDisponibles()) {
+      // Sin nube no se puede confirmar el aviso del callback: nunca dejarlo en verde.
+      if (aviso?.ok) setGcalMsg(AVISO_GCAL_SIN_CONFIRMAR)
+      setCalendariosCargados(true)
+      return () => {
+        vivo = false
+      }
+    }
+    void estadoCalendarios(cuenta).then((r) => {
+      if (!vivo) return
+      if (r.sesion) onSesion(r.sesion)
+      if (r.ok) {
+        setCalendariosNube(r.calendarios)
+        const google = r.calendarios.find(
+          (c) =>
+            c.proveedor === "google" &&
+            c.activo &&
+            c.perfil_id === activeProfile.id,
+        )
+        if (!!google !== gcal.connected)
+          persistGcal({ ...gcal, connected: !!google })
+        // El callback guardó un aviso verde antes de que la nube confirmara. Si `/estado` no
+        // devuelve la conexión de ESTE perfil, el aviso se reemplaza por uno honesto.
+        if (aviso?.ok && !google) setGcalMsg(AVISO_GCAL_SIN_CONFIRMAR)
+      } else {
+        setGcalMsg(explicarErrorCalendario(r.error))
+      }
+      setCalendariosCargados(true)
+    })
+    return () => {
+      vivo = false
+    }
+    // La cuenta identifica al dueño y el perfil decide qué conexión se muestra. Una renovación de
+    // token no vuelve a pedir la lista.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cuenta?.usuario.id, activeProfile.id])
   // "Todos los avisos": opción opcional que decide si los recordatorios nuevos se crean con
   // Google Calendar ya marcado. Viene activada al conectar y se puede apagar cuando se quiera;
   // si el dato no existe todavía (instalaciones anteriores), se toma como activada.
@@ -7854,43 +7966,118 @@ function SettingsScreen({
         : "Listo: los recordatorios nuevos se crean sin Google Calendar; puedes encenderlo en cada uno.",
     )
   }
-  const connectGcal = () => {
+  const connectGcal = async () => {
+    setGcalMsg("")
+    if (!cuenta) {
+      setGcalMsg("Entrá a tu cuenta para conectar Google Calendar.")
+      return
+    }
     setGcalBusy("connect")
-    setGcalMsg("")
-    window.setTimeout(() => {
-      persistGcal({ ...gcal, connected: true, syncAll: true })
-      setGcalBusy("")
-      setGcalMsg(
-        "Cuenta conectada. Los recordatorios nuevos vienen con Google Calendar activado.",
-      )
-    }, 1200)
-  }
-  const disconnectGcal = () => {
-    persistGcal({ connected: false })
-    setGcalMsg("")
-  }
-  const syncGcal = () => {
-    setGcalBusy("sync")
-    setGcalMsg("")
-    window.setTimeout(() => {
-      const count = gcalEvents.length
+    const r = await iniciarConexionCalendario(
+      cuenta,
+      activeProfile.id,
+      "google",
+    )
+    if (r.sesion) onSesion(r.sesion)
+    setGcalBusy("")
+    if (!r.ok) {
+      setGcalMsg(explicarErrorCalendario(r.error))
+      return
+    }
+    if (r.url) {
+      // Modo real: el navegador va al consentimiento de Google y vuelve al callback.
+      window.location.assign(r.url)
+      return
+    }
+    if (r.calendario) {
+      setCalendariosNube((prev) => [
+        ...prev.filter((c) => c.id !== r.calendario!.id),
+        r.calendario!,
+      ])
       persistGcal({
         ...gcal,
         connected: true,
-        lastSync: new Date().toISOString(),
-        lastCount: count,
+        syncAll: true,
+        lastSync: undefined,
+        lastCount: undefined,
       })
-      setGcalBusy("")
-      setGcalMsg(
-        count === 0
-          ? "Todavía no has enviado recordatorios al calendario."
-          : `${count} ${
-              count === 1
+    }
+    setGcalMsg(
+      r.modo === "simulado"
+        ? "Cuenta de prueba conectada. Los recordatorios nuevos vienen con Google Calendar activado."
+        : "Cuenta conectada. Los recordatorios nuevos vienen con Google Calendar activado.",
+    )
+  }
+  const disconnectGcal = async () => {
+    setGcalMsg("")
+    if (!cuenta || !googleCloud) {
+      persistGcal({ connected: false })
+      setGcalMsg("Google Calendar desconectado.")
+      return
+    }
+    setGcalBusy("disconnect")
+    const r = await desconectarCalendario(cuenta, googleCloud.id)
+    if (r.sesion) onSesion(r.sesion)
+    setGcalBusy("")
+    if (!r.ok) {
+      setGcalMsg(explicarErrorCalendario(r.error))
+      return
+    }
+    setCalendariosNube((prev) => prev.filter((c) => c.id !== googleCloud.id))
+    persistGcal({ connected: false })
+    setGcalMsg("Google Calendar desconectado.")
+  }
+  const syncGcal = async () => {
+    setGcalMsg("")
+    if (!cuenta) {
+      setGcalMsg("Entrá a tu cuenta para sincronizar Google Calendar.")
+      return
+    }
+    if (!googleCloud) {
+      setGcalMsg("Conectá tu cuenta de Google para sincronizar.")
+      return
+    }
+    setGcalBusy("sync")
+    // Con «Todos los avisos» va la foto entera; apagado, solo los marcados y sin reconciliar.
+    const fuente = syncAll ? myEvents : gcalEvents
+    const eventos = fuente.map(eventoParaCalendario)
+    const r = await sincronizarCalendario(
+      cuenta,
+      googleCloud.id,
+      eventos,
+      syncAll,
+    )
+    if (r.sesion) onSesion(r.sesion)
+    setGcalBusy("")
+    if (!r.ok) {
+      setGcalMsg(explicarErrorCalendario(r.error))
+      return
+    }
+    const cuando = r.calendario?.ultima_sincronizacion || new Date().toISOString()
+    persistGcal({
+      ...gcal,
+      connected: true,
+      lastSync: cuando,
+      lastCount: r.subidos ?? 0,
+    })
+    if (r.calendario)
+      setCalendariosNube((prev) =>
+        prev.map((c) => (c.id === r.calendario!.id ? r.calendario! : c)),
+      )
+    const subidos = r.subidos ?? 0
+    setGcalMsg(
+      r.errores
+        ? `${subidos} ${
+            subidos === 1 ? "recordatorio sincronizado" : "recordatorios sincronizados"
+          }; ${r.errores} no se pudieron enviar.`
+        : subidos === 0
+          ? "No había recordatorios para enviar."
+          : `${subidos} ${
+              subidos === 1
                 ? "recordatorio sincronizado"
                 : "recordatorios sincronizados"
-            }.`,
-      )
-    }, 1500)
+            }${r.borrados ? ` y ${r.borrados} quitados` : ""}.`,
+    )
   }
   // Filas de los canales de ESTE usuario: WhatsApp va con su logo real (ya no el emoji de burbuja) y
   // las otras dos con su emoji, para que las tres se lean igual.
@@ -8755,21 +8942,23 @@ function SettingsScreen({
                     Google Calendar
                   </p>
                   <p className="text-[12px] text-stone-400">
-                    {gcal.connected
-                      ? gcal.lastSync
-                        ? `Conectado · Última sincronización ${timeAgo(gcal.lastSync)}`
-                        : "Conectado · Sincroniza cuando quieras"
-                      : "Sin conectar"}
+                    {!calendariosCargados && cuenta
+                      ? "Buscando la conexión…"
+                      : googleConectado
+                        ? googleUltimaSync
+                          ? `Conectado · Última sincronización ${timeAgo(googleUltimaSync)}`
+                          : "Conectado · Sincroniza cuando quieras"
+                        : "Sin conectar"}
                   </p>
                 </div>
-                {gcal.connected && (
+                {googleConectado && (
                   <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 flex-shrink-0">
-                    ✓ Conectado
+                    {googleModo === "simulado" ? "✓ Modo de prueba" : "✓ Conectado"}
                   </span>
                 )}
               </div>
               <div className="flex gap-2 mt-4">
-                {gcal.connected ? (
+                {googleConectado ? (
                   <>
                     <button
                       onClick={syncGcal}
@@ -8782,9 +8971,10 @@ function SettingsScreen({
                     </button>
                     <button
                       onClick={disconnectGcal}
-                      className="px-4 py-3 rounded-2xl bg-stone-100 dark:bg-stone-800 text-stone-600 dark:text-stone-300 text-[13px] font-semibold"
+                      disabled={gcalBusy !== ""}
+                      className="px-4 py-3 rounded-2xl bg-stone-100 dark:bg-stone-800 text-stone-600 dark:text-stone-300 text-[13px] font-semibold disabled:opacity-60"
                     >
-                      Desconectar
+                      {gcalBusy === "disconnect" ? "Desconectando…" : "Desconectar"}
                     </button>
                   </>
                 ) : (
@@ -8799,7 +8989,7 @@ function SettingsScreen({
                   </button>
                 )}
               </div>
-              {gcal.connected && (
+              {googleConectado && (
                 <div className="flex items-center gap-3 mt-4 pt-4 border-t border-stone-50 dark:border-stone-800">
                   <span className="text-[15px]">🗓️</span>
                   <div className="min-w-0 flex-1">
@@ -8832,28 +9022,37 @@ function SettingsScreen({
                 </div>
               )}
               <p className="text-[12px] text-stone-400 mt-3">
-                {gcalEvents.length === 0
+                {gcalSincronizados === 0
                   ? "Aún no has enviado recordatorios a tu calendario."
-                  : `${gcalEvents.length} ${
-                      gcalEvents.length === 1
+                  : `${gcalSincronizados} ${
+                      gcalSincronizados === 1
                         ? "recordatorio está"
                         : "recordatorios están"
                     } en tu calendario.`}
               </p>
               {gcalMsg && (
-                <p className="text-[12px] font-semibold text-emerald-600 dark:text-emerald-400 mt-2">
+                <p
+                  role="status"
+                  className={`text-[12px] font-semibold mt-2 ${
+                    gcalAvisoError
+                      ? "text-amber-700 dark:text-amber-300"
+                      : "text-emerald-600 dark:text-emerald-400"
+                  }`}
+                >
                   {gcalMsg}
                 </p>
               )}
+              {googleCloud?.ultimo_error && (
+                <p className="text-[11px] text-amber-700 dark:text-amber-300 mt-1">
+                  Último error: {googleCloud.ultimo_error}
+                </p>
+              )}
               <p className="text-[11px] text-stone-400 mt-2">
-                En esta versión la conexión es una demostración, sin cuenta de
-                Google: no sincroniza sola todos tus recordatorios. Con la
-                cuenta conectada y «Todos los avisos» activado, los
-                recordatorios nuevos vienen con la opción de Google Calendar ya
-                marcada y el envío se abre rellenado para que lo confirmes; si
-                apagas «Todos los avisos», se crean sin marcar y lo enciendes en
-                cada uno. También puedes descargar cualquier recordatorio en
-                .ics para Apple Calendar y Outlook.
+                {googleModo === "simulado"
+                  ? "Modo de prueba: el circuito de ida y vuelta funciona contra un calendario simulado, sin llamar a Google. Cuando la nube tenga las credenciales de Google Cloud, la misma tarjeta usa la cuenta real."
+                  : "La cuenta está conectada. «Todos los avisos» manda la foto completa de tus recordatorios; si lo apagás, solo se envían los que marques en cada uno. Los cambios hechos en Google vuelven en la próxima sincronización."}{" "}
+                El enlace de Google Calendar y el .ics para Apple y Outlook
+                siguen disponibles aunque no conectes la cuenta.
               </p>
             </div>
             {/* Apple Calendar y Outlook, cada uno con su tarjeta dentro del desplegable: se conectan y se
@@ -9451,6 +9650,11 @@ export default function App() {
   useEffect(() => {
     eventsRef.current = events
   }, [events])
+  // Etapa 16: el callback de Google vuelve con `?calendario=…&estado=…`. Se consume una vez, se
+  // guarda el aviso para Ajustes y la dirección queda limpia antes de que la persona siga usando la app.
+  useEffect(() => {
+    procesarRetornoCalendario()
+  }, [])
   // Etapa 15: la cuenta es opcional y vive en este dispositivo. Al arrancar se procesa el enlace del
   // correo (si volvió con tokens en el hash) y se renueva la sesión si está por vencer. Nada bloquea
   // la app: si falla, se sigue como invitado y Ajustes cuenta el motivo.

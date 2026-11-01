@@ -568,17 +568,23 @@ sincronización, la lista de dispositivos con cierre remoto, los adjuntos en Sto
   el JWT de la cuenta y escucha las cinco tablas filtradas por `user_id`. El sondeo de 45 s sigue como
   red de seguridad y la tarjeta muestra si el canal está conectado o reconectando.
 
-Las migraciones nuevas son `0004` a `0008` (ya aplicadas al proyecto) y la guía de Auth, RLS,
-Storage y Realtime está en `supabase/README.md`. Las suites de la etapa son `tests/e2e-cuenta.mjs`
+Las migraciones nuevas son `0004` a `0009` (las de la Etapa 15 ya están aplicadas al proyecto; la
+0009 se corre antes de publicar las funciones de calendarios) y la guía de Auth, RLS, Storage,
+Realtime y calendarios está en `supabase/README.md`. Las suites de la etapa son `tests/e2e-cuenta.mjs`
 (54 comprobaciones de identidad, vínculo y sesión), `tests/e2e-sync.mjs` (36: subida inicial, bajada
 remota, desempate por dispositivo, tumbas, caída de red y un lote de 205 cambios),
 `tests/e2e-dispositivos.mjs` (27: renombre, cierre remoto/global y copia local),
-`tests/e2e-adjuntos.mjs` (14: Storage, URLs firmadas y huérfanos) y `tests/e2e-tiempo-real.mjs` (14:
-join, aviso y reconexión). Las pruebas negativas `supabase/tests/0005_negativo.sql` y
-`0006_negativo.sql` se corren contra el proyecto y se revierten. La batería pasa de 930 a **987**.
+`tests/e2e-adjuntos.mjs` (14: Storage, URLs firmadas y huérfanos), `tests/e2e-tiempo-real.mjs` (14:
+join, aviso y reconexión) y `tests/e2e-calendarios.mjs` (41: OAuth simulado, RLS, PKCE, push
+completo/parcial, conexión por perfil, desconexión y callback). Las pruebas negativas
+`supabase/tests/0005_negativo.sql` y `0006_negativo.sql` se corren contra el proyecto y se revierten.
+La batería pasa de 930 a **1028**.
 
-La Etapa 16 (calendarios reales) queda bloqueada hasta tener credenciales OAuth de Google, Apple y
-Microsoft; el detalle de lo que hace falta está en
+La Etapa 16 ya conecta una cuenta real de Google con OAuth (PKCE + state), guarda los tokens
+cifrados en la Edge Function y tiene el push verificado contra Google Calendar. La bajada de cambios
+desde Google se está cerrando con resolución de conflictos por la hora del último cambio. El
+adaptador simulado (`CALENDARIOS_MODO=simulado`, «Modo de prueba» en Ajustes) sigue disponible para
+probar el circuito sin credenciales. Los detalles, los contratos y la lista de verificación están en
 [`docs/etapa16-calendarios.md`](docs/etapa16-calendarios.md).
 
 ## Roadmap: de la V2.1 a la V3.1

@@ -1,4 +1,4 @@
-# Nube de AVISPATE · Etapas 10 a 15 (avisos con la app cerrada, entrega real, cuenta y sincronización)
+# Nube de AVISPATE · Etapas 10 a 16 (avisos, entrega real, cuenta, sincronización y calendarios)
 
 Supabase guarda la suscripción de cada teléfono y la cola de avisos que el teléfono calculó. Cada
 minuto, un cron llama a una función que entrega lo que ya venció por el canal de cada fila: **push**
@@ -119,7 +119,26 @@ Supabase · dispositivos + avisos  ◀── cron cada minuto ──▶ Edge Fun
     order by tablename;
    ```
 
-   Las cuatro migraciones de la Etapa 15 no llevan marcadores que cambiar. Las pruebas negativas
+   **Etapa 16.** Después de la 0008, corré `supabase/migrations/0009_etapa16_calendarios.sql`. Crea
+   `calendarios_cuenta` (tokens cifrados), `eventos_calendario` (enlace antiduplicados) y
+   `oauth_estado` (PKCE de un solo uso), con RLS. El navegador no tiene `select` sobre las tablas:
+   la app lee por `calendarios-oauth /estado`, que devuelve solo columnas públicas y nunca tokens.
+   `mis_calendarios()` sigue disponible para consultas autenticadas. `completar_oauth()` solo la
+   puede ejecutar `service_role`. Comprobación:
+
+   ```sql
+   select tablename from pg_tables
+    where schemaname = 'public'
+      and tablename in ('calendarios_cuenta','eventos_calendario','oauth_estado')
+    order by tablename;
+   select proname from pg_proc
+    where pronamespace = 'public'::regnamespace
+      and proname in ('mis_calendarios','completar_oauth','purgar_oauth_estado');
+   -- Debe devolver false: la app no puede leer la tabla de tokens.
+   select has_table_privilege('authenticated', 'public.calendarios_cuenta', 'select');
+   ```
+
+   Las migraciones de la Etapa 15 no llevan marcadores que cambiar. Las pruebas negativas
    `supabase/tests/0005_negativo.sql` y `0006_negativo.sql` se corren al final, contra el proyecto y
    dentro de una transacción que termina en `rollback`.
 
@@ -148,25 +167,36 @@ Supabase · dispositivos + avisos  ◀── cron cada minuto ──▶ Edge Fun
    | `WHATSAPP_APP_SECRET` | App Secret de Meta, para validar `x-hub-signature-256` |
    | `RESEND_WEBHOOK_SECRET` | secreto `whsec_…` del webhook de Resend (Svix) |
    | `WEBHOOK_TOKEN` | respaldo simple para probar el webhook con `?secreto=…` |
+   | `GOOGLE_CLIENT_ID` | client id **Web application** de Google Cloud (Etapa 16) |
+   | `GOOGLE_CLIENT_SECRET` | client secret de esa credencial |
+   | `CALENDARIOS_MODO` | `simulado` (por defecto) o `real` |
+   | `CALENDARIOS_TOKEN_KEY` | clave AES-256 de 32 bytes en base64: `openssl rand -base64 32` |
+   | `CALENDARIOS_APP_URL` | a dónde vuelve el callback; por defecto `https://avispate-app.vercel.app` |
+   | `CALENDARIOS_APP_URLS` | opcional; orígenes extra separados por coma (por ejemplo `http://localhost:8443`) |
 
    Si falta un grupo de secretos, ese canal queda «Falta configurar en la nube» en Ajustes y la
-   función falla solo esas filas; el push y los avisos locales siguen funcionando.
+   función falla solo esas filas; el push y los avisos locales siguen funcionando. Sin
+   `CALENDARIOS_MODO=real`, los calendarios usan el adaptador simulado y **no** llaman a Google.
 
 3. **Publicar las funciones.** La de entrega y la de estados:
 
    ```bash
    npx --yes supabase@latest functions deploy enviar-avisos --project-ref vmctsurhswayrrwrkggj
    npx --yes supabase@latest functions deploy webhooks-envio --project-ref vmctsurhswayrrwrkggj --no-verify-jwt
+   npx --yes supabase@latest functions deploy calendarios-oauth --project-ref vmctsurhswayrrwrkggj --no-verify-jwt
+   npx --yes supabase@latest functions deploy calendarios-sync --project-ref vmctsurhswayrrwrkggj
    ```
 
    `enviar-avisos` queda con la verificación de JWT activada (la de por defecto): el cron y la app
-   mandan la anon key, que es un JWT válido del proyecto y ya es pública. `webhooks-envio` se publica
-   **sin** esa verificación porque Meta y Resend no mandan un JWT de Supabase: la función se protege
-   sola con la firma del proveedor (o con `WEBHOOK_TOKEN`). Si la dejás con JWT, el gateway responde
-   401 antes de que la función pueda validar la firma.
+   mandan la anon key, que es un JWT válido del proyecto y ya es pública. `webhooks-envio` y
+   `calendarios-oauth` se publican **sin** esa verificación porque Meta, Resend y Google no mandan un
+   JWT de Supabase: se protegen con la firma del proveedor, el `state` de un solo uso y la
+   comprobación manual del Bearer en las rutas autenticadas. `calendarios-sync` conserva la
+   verificación por defecto.
 
    Desde la Etapa 14 la entrega también manda WhatsApp y correo: si venís de la Etapa 11, **volvé a
-   publicar `enviar-avisos`** con este mismo comando.
+   publicar `enviar-avisos`** con este mismo comando. Las dos funciones de calendarios no se publican
+   hasta que la 0009 esté aplicada; el modo simulado funciona sin credenciales de Google.
 
 4. **Probar a mano.** El GET dice qué canales están configurados (solo booleanos); el POST entrega lo
    vencido:
@@ -311,6 +341,50 @@ La sincronización lleva las cinco entidades, los adjuntos y los avisos de Realt
 la misma cuenta. Queda el historial de versiones para un conflicto, la descarga masiva de adjuntos y
 la restauración completa cuando un teléfono estuvo más de 90 días sin abrir. Los detalles están en
 [`docs/etapa15-cuenta-y-sincronizacion.md`](../docs/etapa15-cuenta-y-sincronizacion.md).
+
+## Calendarios de ida y vuelta (Etapa 16)
+
+### Cómo funciona
+
+- `src/lib/calendarios.ts` pide el estado a `GET /functions/v1/calendarios-oauth/estado` y, al tocar
+  **Conectar con Google Calendar**, hace `POST /iniciar` con el Bearer de la sesión y el `perfilId`
+  del usuario local activo. La función crea un `state` + PKCE S256 de un solo uso y devuelve la URL
+  de consentimiento. Cada perfil (Yo, Abuela, Empresa) tiene su propia conexión.
+- Google vuelve a `.../functions/v1/calendarios-oauth/callback/google?code=…&state=…`. La función
+  cambia el código por tokens, los cifra con AES-256-GCM (`CALENDARIOS_TOKEN_KEY`) y llama a
+  `completar_oauth()`; después redirige a la app con `?calendario=google&estado=conectado`.
+- **Sincronizar ahora** manda `POST /functions/v1/calendarios-sync` con la foto de recordatorios y
+  `completo: true` si «Todos los avisos» está encendido. El servidor guarda el id externo en
+  `eventos_calendario` (la segunda pasada actualiza, no duplica) y, con la foto completa, borra lo
+  que ya no está. Después baja los cambios con el `syncToken` de Google.
+- **Desconectar** revoca el token en Google y borra la conexión y sus enlaces.
+- `CALENDARIOS_MODO=simulado` (por defecto) usa un adaptador sin red: el circuito completo se puede
+  probar hoy y la UI lo muestra como **«Modo de prueba»**. No hay tokens ni llamadas a Google.
+
+### Configurar Google (cuando estén las credenciales)
+
+1. En **Google Cloud Console** creá un proyecto, habilitá **Google Calendar API** y configurá la
+   pantalla de consentimiento. Scope:
+   `https://www.googleapis.com/auth/calendar.events` (la función además pide `openid email` para
+   mostrar la cuenta).
+2. Creá credenciales **OAuth client ID → Web application** con el redirect URI exacto:
+   `https://vmctsurhswayrrwrkggj.supabase.co/functions/v1/calendarios-oauth/callback/google`.
+3. Guardá en Supabase `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `CALENDARIOS_MODO=real` y una
+   `CALENDARIOS_TOKEN_KEY` de 32 bytes en base64 (`openssl rand -base64 32`). Para desarrollo agregá
+   el origen local a `CALENDARIOS_APP_URLS`.
+4. Aplicá la 0009 y publicá las dos funciones (los comandos están arriba). En modo real, sin la clave
+   o sin las credenciales, la conexión devuelve un error claro y no guarda nada.
+
+### Probar
+
+1. En Ajustes → Calendarios → Google Calendar, tocá **Conectar con Google Calendar**. En modo
+   simulado la tarjeta queda en «✓ Modo de prueba»; en modo real vuelve de Google con
+   «Google Calendar conectado».
+2. Tocá **Sincronizar ahora**. La tarjeta cuenta cuántos recordatorios subieron y `eventos_calendario`
+   debe tener una fila por cada uno. Repetí: no debe haber duplicados.
+3. Borrá un recordatorio con «Todos los avisos» encendido y sincronizá: el evento externo se borra y
+   el enlace queda `borrado`.
+4. Tocá **Desconectar**: la conexión y sus enlaces desaparecen y el token se revoca en Google.
 
 ## WhatsApp y correo (Etapa 14)
 
