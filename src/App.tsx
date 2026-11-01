@@ -42,6 +42,7 @@ import {
 } from "./lib/sync"
 import { programarAvisos, type AvisoProgramado } from "./lib/cola"
 import {
+  aplicarCambiosCalendario,
   calendariosDisponibles,
   desconectarCalendario,
   estadoCalendarios,
@@ -51,7 +52,9 @@ import {
   procesarRetornoCalendario,
   sincronizarCalendario,
   type CalendarioCuenta,
+  type CambioCalendario,
   type EventoCalendario,
+  type ResultadoAplicarCambios,
 } from "./lib/calendarios"
 import {
   conectarTiempoReal,
@@ -160,6 +163,9 @@ interface Reminder {
   ownerId?: string
   history?: CompletedOccurrence[]
   gcalAddedAt?: string
+  // Hora del último cambio local que afecta lo que se ve en el calendario (título, fecha, hora o
+  // notas). La bajada de Google la compara con la hora del cambio remoto: gana la más nueva.
+  updatedAt?: string
   // Marcas de los otros dos calendarios: el mismo recordatorio puede estar en Google Calendar, en
   // Apple Calendar y en Outlook a la vez, y cada destino lleva su propia fecha.
   appleAddedAt?: string
@@ -1732,7 +1738,8 @@ function eventoParaCalendario(event: Reminder): EventoCalendario {
     notas: [event.notes, `Recordatorio de AVISPATE · ${event.category}`]
       .filter(Boolean)
       .join("\n"),
-    actualizadoEn: event.gcalAddedAt || new Date().toISOString(),
+    actualizadoEn:
+      event.updatedAt || event.gcalAddedAt || new Date().toISOString(),
     zona,
   }
 }
@@ -7277,6 +7284,7 @@ function CuentaCard({
 
 function SettingsScreen({
   events,
+  onApplyCalendarChanges,
   dark,
   onToggleDark,
   onReset,
@@ -7309,6 +7317,10 @@ function SettingsScreen({
   ultimoTiempoReal,
 }: {
   events: Reminder[]
+  onApplyCalendarChanges: (
+    cambios: CambioCalendario[],
+    enviados: EventoCalendario[],
+  ) => ResultadoAplicarCambios<Reminder>
   dark: boolean
   onToggleDark: () => void
   onReset: () => void
@@ -8064,20 +8076,39 @@ function SettingsScreen({
       setCalendariosNube((prev) =>
         prev.map((c) => (c.id === r.calendario!.id ? r.calendario! : c)),
       )
+    const pull = onApplyCalendarChanges(r.cambios ?? [], eventos)
     const subidos = r.subidos ?? 0
-    setGcalMsg(
-      r.errores
-        ? `${subidos} ${
-            subidos === 1 ? "recordatorio sincronizado" : "recordatorios sincronizados"
-          }; ${r.errores} no se pudieron enviar.`
-        : subidos === 0
-          ? "No había recordatorios para enviar."
-          : `${subidos} ${
-              subidos === 1
-                ? "recordatorio sincronizado"
-                : "recordatorios sincronizados"
-            }${r.borrados ? ` y ${r.borrados} quitados` : ""}.`,
-    )
+    const traidos = pull.aplicados + pull.eliminados
+    const partes: string[] = []
+    if (subidos)
+      partes.push(
+        `${subidos} ${
+          subidos === 1 ? "recordatorio sincronizado" : "recordatorios sincronizados"
+        }${r.borrados ? ` y ${r.borrados} quitados` : ""}`,
+      )
+    else if (r.borrados)
+      partes.push(
+        `${r.borrados} ${r.borrados === 1 ? "recordatorio quitado" : "recordatorios quitados"} de Google`,
+      )
+    else if (!traidos && !pull.conflictos)
+      partes.push("No había recordatorios para enviar")
+    if (subidos && r.errores)
+      partes.push(
+        `${r.errores} ${r.errores === 1 ? "no se pudo enviar" : "no se pudieron enviar"}`,
+      )
+    if (traidos)
+      partes.push(
+        `${traidos} ${traidos === 1 ? "cambio traído" : "cambios traídos"} de Google Calendar`,
+      )
+    if (pull.conflictos)
+      partes.push(
+        `${pull.conflictos} ${
+          pull.conflictos === 1
+            ? "cambio no se aplicó porque tu versión local es más nueva"
+            : "cambios no se aplicaron porque tu versión local es más nueva"
+        }`,
+      )
+    setGcalMsg(`${partes.join("; ")}.`)
   }
   // Filas de los canales de ESTE usuario: WhatsApp va con su logo real (ya no el emoji de burbuja) y
   // las otras dos con su emoji, para que las tres se lean igual.
@@ -10289,6 +10320,9 @@ export default function App() {
           }),
         }
     }
+    // Cualquier guardado del formulario cuenta como el último cambio local: si Google también cambió
+    // el evento, la bajada conserva esta versión y el próximo push la vuelve a subir.
+    guardado = { ...guardado, updatedAt: new Date().toISOString() }
     const alreadyAdded = events.some(
       (e) => e.id === guardado.id && e.gcalAddedAt,
     )
@@ -10378,6 +10412,7 @@ export default function App() {
             date: next.date,
             time: next.time,
             completed: false,
+            updatedAt: stamp,
             history: [
               { id: uid(), date: e.date, completedAt: stamp },
               ...(e.history ?? []),
@@ -11046,6 +11081,24 @@ export default function App() {
           {screen === "settings" && (
             <SettingsScreen
               events={events}
+              onApplyCalendarChanges={(cambios, enviados) => {
+                const opciones = {
+                  perfilId: activeProfile.id,
+                  perfilPorDefecto: DEFAULT_PROFILE_ID,
+                  enviados,
+                }
+                const resultado = aplicarCambiosCalendario(
+                  events,
+                  cambios,
+                  opciones,
+                )
+                if (resultado.aplicados || resultado.eliminados)
+                  setEvents(
+                    (prev) =>
+                      aplicarCambiosCalendario(prev, cambios, opciones).eventos,
+                  )
+                return resultado
+              }}
               dark={dark}
               onToggleDark={() => setDark((v) => !v)}
               onReset={reset}

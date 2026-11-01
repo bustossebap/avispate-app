@@ -153,6 +153,7 @@ type CambioRemoto = {
   notas?: string
   eliminado: boolean
   actualizadoEn: string
+  zona?: string
 }
 
 type ResultadoPush = { id: string; etag?: string }
@@ -216,9 +217,10 @@ type RespuestaGoogle = {
   description?: string
   updated?: string
   nextSyncToken?: string
+  nextPageToken?: string
   items?: RespuestaGoogle[]
-  start?: { date?: string; dateTime?: string }
-  end?: { date?: string; dateTime?: string }
+  start?: { date?: string; dateTime?: string; timeZone?: string }
+  end?: { date?: string; dateTime?: string; timeZone?: string }
   extendedProperties?: { private?: { avispate_id?: string } }
   error?: { message?: string }
 }
@@ -291,29 +293,37 @@ class Google implements AdaptadorCalendario {
   }
 
   private async bajarCon(cursor: string | null): Promise<ResultadoBajada> {
-    const parametros = new URLSearchParams({
-      maxResults: "250",
-      showDeleted: "true",
-      singleEvents: "true",
-    })
-    if (cursor) parametros.set("syncToken", cursor)
-    else {
-      // Primera bajada: últimos 90 días. Sin ventana, una cuenta grande devolvería años de historia.
-      const desde = new Date(Date.now() - 90 * 86400_000).toISOString()
-      parametros.set("timeMin", desde)
-      parametros.set("orderBy", "startTime")
-    }
+    const cambios: CambioRemoto[] = []
+    let pageToken: string | undefined
+    let siguienteCursor: string | null = null
 
-    const datos = await this.pedir(
-      `/calendars/${encodeURIComponent(this.calendario)}/events?${parametros.toString()}`,
-    )
-    const cambios: CambioRemoto[] = (datos.items || [])
-      .map((item) => {
+    // Google devuelve `nextSyncToken` solo en la última página. Con `nextPageToken` hay que seguir
+    // pidiendo: si no, una cuenta con más de 250 eventos (o con repeticiones expandidas) se queda sin
+    // cursor y vuelve a bajar todo desde cero en cada sincronización.
+    do {
+      const parametros = new URLSearchParams({
+        maxResults: "250",
+        showDeleted: "true",
+        singleEvents: "true",
+      })
+      if (cursor) parametros.set("syncToken", cursor)
+      else {
+        // Primera bajada: últimos 90 días. Sin ventana, una cuenta grande devolvería años de historia.
+        const desde = new Date(Date.now() - 90 * 86400_000).toISOString()
+        parametros.set("timeMin", desde)
+        parametros.set("orderBy", "startTime")
+      }
+      if (pageToken) parametros.set("pageToken", pageToken)
+
+      const datos = await this.pedir(
+        `/calendars/${encodeURIComponent(this.calendario)}/events?${parametros.toString()}`,
+      )
+      for (const item of datos.items || []) {
         const recordatorioId =
           item.extendedProperties?.private?.avispate_id || ""
-        if (!recordatorioId) return null
+        if (!recordatorioId) continue
         const todoElDia = !!(item.start?.date || item.end?.date)
-        return {
+        cambios.push({
           recordatorioId,
           titulo: item.summary || "Recordatorio",
           inicio:
@@ -323,11 +333,38 @@ class Google implements AdaptadorCalendario {
           notas: item.description || "",
           eliminado: item.status === "cancelled",
           actualizadoEn: item.updated || new Date().toISOString(),
-        } as CambioRemoto
-      })
-      .filter((c): c is CambioRemoto => !!c)
+          zona: item.start?.timeZone || undefined,
+        })
+      }
+      pageToken = datos.nextPageToken
+      if (datos.nextSyncToken) siguienteCursor = datos.nextSyncToken
+    } while (pageToken)
 
-    return { cambios, cursor: datos.nextSyncToken || cursor }
+    // `singleEvents` expande una repetición en varias instancias con el mismo `avispate_id`. Para la
+    // app es un solo recordatorio: se queda con el último cambio, salvo que una instancia siga viva
+    // (entonces no se toma como borrado).
+    const porRecordatorio = new Map<string, CambioRemoto>()
+    for (const cambio of cambios) {
+      const previo = porRecordatorio.get(cambio.recordatorioId)
+      if (!previo) {
+        porRecordatorio.set(cambio.recordatorioId, cambio)
+        continue
+      }
+      if (previo.eliminado && !cambio.eliminado) {
+        porRecordatorio.set(cambio.recordatorioId, cambio)
+        continue
+      }
+      if (
+        previo.eliminado === cambio.eliminado &&
+        Date.parse(cambio.actualizadoEn) >= Date.parse(previo.actualizadoEn)
+      )
+        porRecordatorio.set(cambio.recordatorioId, cambio)
+    }
+
+    return {
+      cambios: [...porRecordatorio.values()],
+      cursor: siguienteCursor || cursor,
+    }
   }
 }
 
@@ -646,6 +683,28 @@ async function sincronizar(
   }
 
   const ahora = new Date().toISOString()
+  // Si el evento se borró en Google, el enlace queda marcado para que un push parcial posterior no
+  // intente actualizar un evento que ya no existe y lo vuelva a crear con el mismo id.
+  const borradosRemotos = cambios
+    .filter((cambio) => cambio.eliminado)
+    .map((cambio) => cambio.recordatorioId)
+  if (borradosRemotos.length) {
+    const { error: errorBorrados } = await admin
+      .from("eventos_calendario")
+      .update({
+        estado: "borrado",
+        actualizado_en: ahora,
+        sincronizado_en: ahora,
+        ultimo_error: null,
+      })
+      .eq("calendario_id", fila.id)
+      .in("recordatorio_id", borradosRemotos)
+    if (errorBorrados) {
+      errores += 1
+      if (!primerError)
+        primerError = "No se pudo marcar un evento borrado en Google."
+    }
+  }
   const { data: actualizado, error: errorActualizar } = await admin
     .from("calendarios_cuenta")
     .update({

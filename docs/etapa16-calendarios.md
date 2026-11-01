@@ -1,11 +1,13 @@
 # Etapa 16 · Calendarios de ida y vuelta
 
-Estado: **Google real conectado y push verificado**. La app cierra el OAuth con PKCE + state, guarda
-los tokens cifrados en la Edge Function y crea/actualiza/borra eventos en Google Calendar. La bajada
-(traer a los recordatorios locales los cambios hechos en Google) está en la fase final: se aplica en
-el cliente con regla de último cambio y se apoya en el `syncToken` de Google. El adaptador simulado
-sigue disponible para probar el circuito sin credenciales. Apple y Outlook conservan su exportación
-`.ics` y su enlace manual: no se promete una conexión que el navegador no puede hacer.
+Estado: **cerrada en código — Google real conectado, push verificado y bajada implementada**. La app
+cierra el OAuth con PKCE + state, guarda los tokens cifrados en la Edge Function y crea/actualiza/borra
+eventos en Google Calendar. La bajada trae a los recordatorios locales los cambios hechos en Google:
+se aplica en el cliente con regla de último cambio, se apoya en el `syncToken` de Google y no duplica
+los ecos del push de la misma pasada. Está cubierta por la suite; falta la pasada manual de ida y
+vuelta con dos cuentas. El adaptador simulado sigue disponible para probar el circuito sin
+credenciales. Apple y Outlook conservan su exportación `.ics` y su enlace manual: no se promete una
+conexión que el navegador no puede hacer.
 
 ## 1. Qué problema resuelve
 
@@ -109,9 +111,14 @@ Reglas:
   ya no aparecen se borran también del calendario. Con `false` solo se empuja lo marcado y no se
   reconcilia nada.
 - El servidor mantiene el `evento_externo_id`; dos sincronizaciones seguidas actualizan, no duplican.
-- Devuelve `{ subidos, borrados, bajados, cursor, calendario }`. `bajados` queda en 0 en el adaptador
-  simulado; el de Google ya implementa `bajar(cursor)` con `syncToken` y devuelve cambios con
-  `recordatorioId` para que una fase siguiente los aplique al teléfono.
+- Devuelve `{ subidos, borrados, bajados, cursor, cambios, calendario }`. `cambios` describe lo que
+  cambió en el calendario externo (`recordatorioId`, `titulo`, `inicio`, `fin`, `todoElDia`, `notas`,
+  `eliminado`, `actualizadoEn`, `zona`). El adaptador simulado devuelve la lista vacía; el de Google
+  recorre todas las páginas (`nextPageToken`), limita la primera pasada a 90 días, deduplica las
+  ocurrencias repetidas por `avispate_id` y guarda el `nextSyncToken` para la siguiente.
+- La app aplica esos `cambios` en el cliente con `aplicarCambiosCalendario`: los recordatorios
+  locales se actualizan o se quitan sin depender de la tabla `recordatorios` de la Etapa 15. Los
+  eventos sin `recordatorioId` o de otro perfil se ignoran.
 
 ### Adaptador simulado
 
@@ -127,14 +134,16 @@ lo dice sin ambigüedad: **«Modo de prueba»**. No hay llamadas a Google y no s
   enlace como `borrado` y llama a `borrar` en el proveedor. Si el borrado remoto falla, el enlace
   queda en `error` y se reintenta en la próxima pasada.
 - **Borrado remoto:** `bajar()` devuelve el `recordatorioId` de `extendedProperties.private` y
-  `deleted`. La fase que aplique esos cambios debe respetar la misma regla de «último cambio gana»
-  del motor de la Etapa 15 (`updated_at` + desempate determinista), nunca pisar una edición local
-  más nueva.
-- **Edición simultánea:** gana el `actualizadoEn` más nuevo. Si el evento externo cambió después de
-  la última sincronización, se devuelve el conflicto en `bajar()` y la app decide avisar; no se
-  sobrescribe en silencio.
+  `eliminado: true`. La app lo quita de la lista local, sin volver a subirlo en la misma pasada.
+- **Edición simultánea:** gana el `updatedAt` más nuevo. Cada guardado del formulario y cada
+  postergación local estampan esa hora; si la copia local es más nueva, el cambio de Google no se
+  aplica, se cuenta como conflicto y la próxima pasada lo vuelve a subir. Si la de Google es más
+  nueva, se aplica título, fecha, hora y notas, y se conserva el resto de los datos locales.
+- **Ecos del push:** los eventos que la app acaba de enviar en la misma pasada se reconocen por id,
+  título, inicio, fin y notas, y no se vuelven a aplicar aunque Google devuelva un `updatedAt` nuevo.
+  Así una sincronización no pisa la edición local que se acaba de subir.
 - **Recurrencia:** se envía `RRULE` igual que el `.ics`; las excepciones de una ocurrencia quedan
-  para la fase de pull, porque Google las modela como eventos separados.
+  para una fase posterior, porque Google las modela como eventos separados.
 
 ## 6. Revocación y seguridad
 
@@ -149,17 +158,27 @@ lo dice sin ambigüedad: **«Modo de prueba»**. No hay llamadas a Google y no s
   proveedor. Un state inválido no crea ninguna conexión.
 - CORS: solo las cabeceras necesarias. La función no acepta `user_id` en el cuerpo.
 
-## 7. Lo que falta para la cuenta real
+## 7. Puesta en marcha y verificación manual
 
-1. Crear el proyecto en Google Cloud, habilitar **Google Calendar API**, configurar la pantalla de
-   consentimiento y crear credenciales **Web application** con el redirect URI de arriba.
-2. Guardar en Supabase: `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `CALENDARIOS_MODO=real`,
-   `CALENDARIOS_TOKEN_KEY` (32 bytes base64) y, si cambia, `CALENDARIOS_APP_URL`.
-3. Aplicar `0009_etapa16_calendarios.sql` y publicar:
-   `calendarios-oauth --no-verify-jwt` y `calendarios-sync`.
-4. Probar con dos cuentas: conectar, crear/editar/borrar desde AVISPATE, editar/borrar desde Google
-   Calendar y verificar que la segunda pasada no duplica.
-5. Revisar el video/permiso de la pantalla de consentimiento si Google lo exige para producción.
+La cuenta real ya está configurada y el push está verificado. Para cerrar la ida y vuelta falta esta
+pasada manual con dos cuentas:
+
+1. Conectar Google en el perfil A, crear un recordatorio con hora y tocarlo en «Todos los avisos».
+2. Abrir Google Calendar, cambiar el título y la hora de ese evento, y volver a AVISPATE. Al
+   sincronizar, el recordatorio local debe mostrar el título y la hora nuevos.
+3. Editar el mismo recordatorio en AVISPATE sin sincronizar y, antes de que pase el sondeo, cambiar
+   el evento en Google. Gana la copia con `updatedAt` más nuevo; la otra se informa como conflicto.
+4. Borrar el evento en Google y sincronizar: el recordatorio local desaparece. Borrarlo en AVISPATE y
+   sincronizar: desaparece de Google.
+5. Repetir con una segunda cuenta para confirmar que cada perfil usa su propia conexión y que no se
+   cruzan los eventos.
+
+Si cambian las credenciales, la puesta en marcha sigue siendo: proyecto en Google Cloud con **Google
+Calendar API**, pantalla de consentimiento y credenciales **Web application** con el redirect URI de
+arriba; secretos `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `CALENDARIOS_MODO=real`,
+`CALENDARIOS_TOKEN_KEY` (32 bytes base64) y `CALENDARIOS_APP_URL`; migración `0009` aplicada y
+funciones `calendarios-oauth --no-verify-jwt` y `calendarios-sync` publicadas. Revisar el
+video/permiso de la pantalla de consentimiento si Google lo exige para producción.
 
 Apple y Outlook mantienen su ruta actual: `.ics` para Apple y enlace `outlook.live.com` para Outlook.
 Cuando existan credenciales de Microsoft Graph se reutiliza la misma tabla y el mismo contrato,
@@ -169,11 +188,10 @@ prometer en la web pura.
 ## 8. Pruebas
 
 - `tests/e2e-calendarios.mjs` monta la app con una sesión, un `fetch` de mentira y comprueba:
-  conectar en modo simulado, el `Bearer`, el cuerpo del push, «Todos los avisos» filtrado,
-  desconectar, el aviso de vuelta del callback y que sin sesión no se llama a la red.
+  conectar en modo simulado, el `Bearer`, el cuerpo del push, «Todos los avisos» filtrado, la bajada
+  de cambios (aplicar, borrar y conflicto a favor de lo local), desconectar, el aviso de vuelta del
+  callback y que sin sesión no se llama a la red. Son 48 comprobaciones.
 - La misma suite lee `0009` y las dos Edge Functions para verificar que las tablas tienen RLS, que
-  los tokens no se conceden al navegador, que el flujo usa PKCE/state y que `service_role` no
-  aparece en `src/`.
-- Las pruebas reales contra Google quedan como lista manual hasta tener credenciales: conectar,
-  crear/editar/borrar desde AVISPATE, editar/borrar desde Google, repetir sin duplicar, revocar y
-  desconectar.
+  los tokens no se conceden al navegador, que el flujo usa PKCE/state, que la bajada pagina con
+  `nextPageToken` y guarda `nextSyncToken`, y que `service_role` no aparece en `src/`.
+- La verificación con Google real es la lista manual de la sección 7.

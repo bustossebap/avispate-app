@@ -73,7 +73,7 @@ const CALENDARIO = {
 
 // Nube mínima de calendarios. `estadoInicial` permite simular una conexión que ya existía (por
 // ejemplo, al volver del callback de Google).
-function red(estadoInicial = []) {
+function red(estadoInicial = [], cambios = []) {
   const llamadas = []
   let calendarios = [...estadoInicial]
   const fetchFalso = async (url, opciones = {}) => {
@@ -100,9 +100,10 @@ function red(estadoInicial = []) {
         ok: true,
         subidos: cantidad,
         borrados: 0,
-        bajados: 0,
+        bajados: cambios.length,
         errores: 0,
         cursor: "sim-1",
+        cambios,
         calendario: {
           ...CALENDARIO,
           ultima_sincronizacion: new Date().toISOString(),
@@ -232,6 +233,17 @@ const botonDe = (m, texto) =>
       sync.includes("avispate_id"),
   )
   check(
+    "C1 · la bajada recorre todas las páginas antes de guardar el cursor",
+    sync.includes("nextPageToken") &&
+      sync.includes("while (pageToken)") &&
+      sync.includes("zona: item.start?.timeZone"),
+  )
+  check(
+    "C1 · la bajada devuelve la zona para reconstruir la hora local",
+    sync.includes("zona?: string") &&
+      bundle.includes("no se aplicó porque tu versión local es más nueva"),
+  )
+  check(
     "C1 · el bundle del navegador no lleva secretos de servidor",
     !bundle.includes("GOOGLE_CLIENT_SECRET") &&
       !bundle.includes("CALENDARIOS_TOKEN_KEY") &&
@@ -353,6 +365,108 @@ const botonDe = (m, texto) =>
   )
   check(
     "U1 · sin errores de ejecución",
+    m.errors.length === 0,
+    m.errors.join(" | "),
+  )
+}
+
+// ------------------------------------------- U2) la bajada aplica cambios y respeta lo local más nuevo
+{
+  const inicioRemoto = new Date(2026, 10, 20, 9, 30, 0)
+  const finRemoto = new Date(2026, 10, 20, 10, 30, 0)
+  const cambios = [
+    {
+      recordatorioId: "e-2",
+      titulo: "Regar las plantas del balcón",
+      inicio: inicioRemoto.toISOString(),
+      fin: finRemoto.toISOString(),
+      todoElDia: false,
+      notas: "Solo las de afuera\nRecordatorio de AVISPATE · Hogar",
+      eliminado: false,
+      actualizadoEn: "2026-12-01T12:00:00.000Z",
+      zona: "America/Argentina/Buenos_Aires",
+    },
+    {
+      recordatorioId: "e-1",
+      titulo: "Cambio de aceite",
+      inicio: inicioRemoto.toISOString(),
+      fin: finRemoto.toISOString(),
+      todoElDia: false,
+      notas: "",
+      eliminado: true,
+      actualizadoEn: "2026-12-02T12:00:00.000Z",
+      zona: "America/Argentina/Buenos_Aires",
+    },
+    {
+      recordatorioId: "e-3",
+      titulo: "Llamar al plomero (Google)",
+      inicio: inicioRemoto.toISOString(),
+      fin: finRemoto.toISOString(),
+      todoElDia: false,
+      notas: "",
+      eliminado: false,
+      actualizadoEn: "2026-12-15T12:00:00.000Z",
+      zona: "America/Argentina/Buenos_Aires",
+    },
+  ]
+  const n = red([CALENDARIO], cambios)
+  const m = montar(
+    bundle,
+    seed({
+      "avispate.events.v1": JSON.stringify([
+        evento("e-1", "Cambio de aceite", {
+          updatedAt: "2026-10-01T10:00:00.000Z",
+        }),
+        evento("e-2", "Regar las plantas", {
+          gcalAddedAt: "2026-10-01T10:00:00.000Z",
+          updatedAt: "2026-10-01T10:00:00.000Z",
+        }),
+        evento("e-3", "Llamar al plomero", {
+          updatedAt: "2026-12-31T00:00:00.000Z",
+        }),
+      ]),
+    }),
+    { fetch: n.fetch },
+  )
+  await wait(180)
+  await m.irAjustes()
+  m.press(m.byLabel("Calendarios de Ana"))
+  await wait(80)
+  m.press(botonDe(m, "Sincronizar ahora"))
+  await wait(200)
+
+  const despues = m.events()
+  const regar = despues.find((e) => e.id === "e-2")
+  const plomero = despues.find((e) => e.id === "e-3")
+  check(
+    "U2 · un cambio nuevo de Google actualiza título, fecha, hora y notas",
+    regar?.name === "Regar las plantas del balcón" &&
+      regar?.date === "2026-11-20" &&
+      regar?.time === "09:30" &&
+      regar?.notes === "Solo las de afuera" &&
+      regar?.updatedAt === "2026-12-01T12:00:00.000Z",
+    JSON.stringify(regar),
+  )
+  check(
+    "U2 · un evento borrado en Google desaparece de la lista local",
+    !despues.some((e) => e.id === "e-1"),
+    JSON.stringify(despues.map((e) => e.id)),
+  )
+  check(
+    "U2 · si la copia local es más nueva, el cambio de Google no la pisa",
+    plomero?.name === "Llamar al plomero" &&
+      plomero?.updatedAt === "2026-12-31T00:00:00.000Z",
+    JSON.stringify(plomero),
+  )
+  check(
+    "U2 · la tarjeta cuenta los cambios traídos y los conflictos",
+    (tarjetaGoogle(m)?.textContent || "").includes(
+      "3 recordatorios sincronizados; 2 cambios traídos de Google Calendar; 1 cambio no se aplicó porque tu versión local es más nueva",
+    ),
+    (tarjetaGoogle(m)?.textContent || "").slice(-400),
+  )
+  check(
+    "U2 · sin errores de ejecución",
     m.errors.length === 0,
     m.errors.join(" | "),
   )

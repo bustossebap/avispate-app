@@ -575,16 +575,19 @@ Realtime y calendarios está en `supabase/README.md`. Las suites de la etapa son
 remota, desempate por dispositivo, tumbas, caída de red y un lote de 205 cambios),
 `tests/e2e-dispositivos.mjs` (27: renombre, cierre remoto/global y copia local),
 `tests/e2e-adjuntos.mjs` (14: Storage, URLs firmadas y huérfanos), `tests/e2e-tiempo-real.mjs` (14:
-join, aviso y reconexión) y `tests/e2e-calendarios.mjs` (41: OAuth simulado, RLS, PKCE, push
-completo/parcial, conexión por perfil, desconexión y callback). Las pruebas negativas
-`supabase/tests/0005_negativo.sql` y `0006_negativo.sql` se corren contra el proyecto y se revierten.
-La batería pasa de 930 a **1028**.
+join, aviso y reconexión) y `tests/e2e-calendarios.mjs` (48: OAuth simulado, RLS, PKCE, push
+completo/parcial, bajada de cambios, conexión por perfil, desconexión y callback). Las pruebas
+negativas `supabase/tests/0005_negativo.sql` y `0006_negativo.sql` se corren contra el proyecto y se
+revierten.
+La batería pasa de 930 a **1035**.
 
 La Etapa 16 ya conecta una cuenta real de Google con OAuth (PKCE + state), guarda los tokens
-cifrados en la Edge Function y tiene el push verificado contra Google Calendar. La bajada de cambios
-desde Google se está cerrando con resolución de conflictos por la hora del último cambio. El
-adaptador simulado (`CALENDARIOS_MODO=simulado`, «Modo de prueba» en Ajustes) sigue disponible para
-probar el circuito sin credenciales. Los detalles, los contratos y la lista de verificación están en
+cifrados en la Edge Function y tiene el **push verificado con una cuenta real**. La bajada ya está
+implementada y cubierta por la suite: los cambios hechos en Google se aplican a los recordatorios
+locales con regla de último cambio, sin duplicar los ecos del push de la misma pasada. Falta la
+pasada manual de ida y vuelta con dos cuentas. El adaptador simulado (`CALENDARIOS_MODO=simulado`,
+«Modo de prueba» en Ajustes) sigue disponible para probar el circuito sin credenciales. Los detalles,
+los contratos y la lista de verificación están en
 [`docs/etapa16-calendarios.md`](docs/etapa16-calendarios.md).
 
 ## Roadmap: de la V2.1 a la V3.1
