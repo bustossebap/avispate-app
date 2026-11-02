@@ -1,4 +1,4 @@
-# AVISPATE — V2.1 (Etapa 15)
+# AVISPATE — V2.2 (Etapa 16)
 
 Primera transformación del prototipo de Figma Make a una V1 funcional ejecutable como aplicación web local.
 
@@ -21,6 +21,7 @@ Primera transformación del prototipo de Figma Make a una V1 funcional ejecutabl
 - Selección de WhatsApp como canal, con envío real por la Cloud API de Meta (plantilla de utilidad) y correo por Resend.
 - Número de WhatsApp con bandera y prefijo completo, incluido el 9 de celular (Chile 🇨🇱 +56 9 por defecto).
 - Cada usuario del dispositivo con su nombre, su emoji (de la rejilla o de la lista completa de emojis), su foto, sus canales y sus calendarios.
+- Google Calendar real de ida y vuelta por usuario: OAuth con PKCE, tokens cifrados en Supabase, push de la foto completa o solo de los marcados y bajada de cambios con regla de último cambio. Apple Calendar y Outlook siguen con `.ics` y enlace manual.
 - Categorías propias: agregar, reordenar y eliminar desde Inicio (o al crear un recordatorio), eligiendo al eliminar si sus recordatorios se borran o quedan sin categoría.
 - Repeticiones por horas, días, semanas, meses o años (y personalizadas).
 - Sección de tips con consejos de uso (Ajustes › Ver tips).
@@ -79,8 +80,8 @@ IP de la red.
 
 La batería E2E vive **dentro del proyecto** (`tests/`): monta el bundle real dentro de jsdom y recorre la
 app como si alguien la tocara —onboarding, crear y editar recordatorios, calendarios, archivos, usuarios,
-borrar y deshacer, Ajustes, tips, cuenta, dispositivos, adjuntos en Storage y Realtime—. Son **22
-suites y 987 comprobaciones**.
+borrar y deshacer, Ajustes, tips, cuenta, dispositivos, adjuntos en Storage y Realtime—. Son **23
+suites y 1038 comprobaciones**.
 
 ```bash
 npm run build        # la batería prueba dist/: si está viejo, se avisa y no corre
@@ -590,7 +591,7 @@ pasada manual de ida y vuelta con dos cuentas. El adaptador simulado (`CALENDARI
 los contratos y la lista de verificación están en
 [`docs/etapa16-calendarios.md`](docs/etapa16-calendarios.md).
 
-## Roadmap: de la V2.1 a la V3.1
+## Roadmap: de la V2.2 a la V3.1
 
 Esto es un plan, no una promesa: los esfuerzos son semanas de una persona y se ajustan al ritmo real. El
 orden no es casual. Con el envío real ya cerrado, sigue la cuenta, porque sin cuenta no hay
@@ -644,6 +645,11 @@ fallan como deben; y una cuenta nueva se puede crear desde una copia de la Etapa
 
 **Objetivo:** que un cambio hecho en AVISPATE aparezca solo en el calendario y al revés, sin bajar
 archivos ni volver a cargar el evento a mano.
+
+**Estado:** Google cerrado en código —OAuth con PKCE, push verificado con una cuenta real y bajada de
+cambios con regla de último cambio—. Falta la prueba manual de ida y vuelta con dos cuentas y las
+repeticiones (`RRULE`). Apple y Outlook siguen con `.ics` y enlace manual hasta que haya credenciales
+de Apple y Microsoft.
 
 - Google con OAuth (PKCE) y Calendar API; Outlook con Microsoft Graph; Apple con CalDAV y contraseña de
   aplicación, o —como mínimo— una suscripción `webcal://` firmada por usuario. Los tokens se guardan
@@ -758,9 +764,11 @@ Apps de escritorio nativas, SSO empresarial y consola de administración, un asi
 recordatorios, publicidad y un mercado de plantillas. Si alguna entra, será una etapa nueva con su propio
 número: este roadmap termina en la V3.1, con AVISPATE instalable, sincronizada, colaborativa y en las
 tiendas. La Etapa 15 ya está completa: cuenta, esquema por entidad, motor de sincronización,
-dispositivos y sesiones, adjuntos en Storage y Realtime. La Etapa 16 (calendarios) necesita
-credenciales OAuth de Google, Apple y Microsoft; conviene iniciar ya esas verificaciones externas
-—y las de Meta Business, dominio y proveedor de correo— para que no frenen el código.
+dispositivos y sesiones, adjuntos en Storage y Realtime. La Etapa 16 quedó cerrada para **Google**
+(OAuth, push verificado con una cuenta real y bajada implementada; falta la prueba manual de ida y
+vuelta con dos cuentas y las repeticiones). Para **Apple y Outlook** todavía hacen falta credenciales
+de Apple y Microsoft, así que conviene iniciar ya esas verificaciones externas —y las de Meta
+Business, dominio y proveedor de correo— para que no frenen el código.
 
 ## Preguntas sobre el permiso de notificaciones y el aviso de inactividad
 
